@@ -1,4 +1,4 @@
-﻿using Photon.Pun;
+using Photon.Pun;
 using UnityEngine;
 using GorillaLocomotion;
 using Player = GorillaLocomotion.GTPlayer;
@@ -70,7 +70,9 @@ namespace YizziCamModV2.Comps
         {
             if (Settings.Load(out int viewMode, out float fov, out bool watermark,
                 out float smoothing, out int savedTimePreset, out bool rain, out float nearClip, out int summonInputMode,
-                out bool fpvRawRotation, out bool fpvClipping, out float fpvClipLag))
+                out bool fpvRawRotation, out bool fpvClipping, out float fpvClipLag,
+                out bool ntEnabled, out bool ntShowName, out bool ntShowPlatform, out bool ntPlatformAsImg,
+                out bool ntShowFps, out bool ntShowPing, out float ntMaxDist, out float ntFloatHeight))
             {
                 showWatermark = watermark;
                 InputManager.instance.summonInputMode = summonInputMode;
@@ -94,6 +96,33 @@ namespace YizziCamModV2.Comps
                 if (cc.SmoothText != null) cc.SmoothText.text = smoothing.ToString("F2");
                 if (cc.NearClipText != null) cc.NearClipText.text = nearClip.ToString("F2");
 
+                // Apply saved name tag settings (NameTagManager may not be ready yet — it applies them itself via Start)
+                var ntm = NameTagManager.Instance;
+                if (ntm != null)
+                {
+                    ntm.ntEnabled       = ntEnabled;
+                    ntm.ntShowName      = ntShowName;
+                    ntm.ntShowPlatform  = ntShowPlatform;
+                    ntm.ntPlatformAsImg = ntPlatformAsImg;
+                    ntm.ntShowFps       = ntShowFps;
+                    ntm.ntShowPing      = ntShowPing;
+                    ntm.ntMaxDist       = ntMaxDist;
+                    ntm.ntFloatHeight   = ntFloatHeight;
+                }
+                else
+                {
+                    // Store them for NameTagManager to pick up when it awakens
+                    _pendingNtEnabled       = ntEnabled;
+                    _pendingNtShowName      = ntShowName;
+                    _pendingNtShowPlatform  = ntShowPlatform;
+                    _pendingNtPlatformAsImg = ntPlatformAsImg;
+                    _pendingNtShowFps       = ntShowFps;
+                    _pendingNtShowPing      = ntShowPing;
+                    _pendingNtMaxDist       = ntMaxDist;
+                    _pendingNtFloatHeight   = ntFloatHeight;
+                    _hasPendingNt           = true;
+                }
+
                 if (!ApplyTime())
                     pendingTimeWeather = true;
                 else
@@ -107,6 +136,17 @@ namespace YizziCamModV2.Comps
                 }
             }
         }
+
+        // Pending name tag settings if NameTagManager wasn't ready when settings loaded
+        internal bool  _hasPendingNt;
+        internal bool  _pendingNtEnabled;
+        internal bool  _pendingNtShowName;
+        internal bool  _pendingNtShowPlatform;
+        internal bool  _pendingNtPlatformAsImg;
+        internal bool  _pendingNtShowFps;
+        internal bool  _pendingNtShowPing;
+        internal float _pendingNtMaxDist       = 20f;
+        internal float _pendingNtFloatHeight   = 0.42f;
 
         bool ApplyTime()
         {
@@ -367,6 +407,7 @@ namespace YizziCamModV2.Comps
 
                 if (GUI.Button(new Rect(35f, y, 165f, 22f), "Save Settings"))
                 {
+                    var ntm2 = NameTagManager.Instance;
                     Settings.Save(
                         GetCurrentViewMode(),
                         CameraController.Instance.TabletCamera.fieldOfView,
@@ -378,7 +419,15 @@ namespace YizziCamModV2.Comps
                         InputManager.instance.summonInputMode,
                         CameraController.Instance.fpvRawRotation,
                         CameraController.Instance.fpvClipping,
-                        CameraController.Instance.fpvClipLag
+                        CameraController.Instance.fpvClipLag,
+                        ntm2 != null && ntm2.ntEnabled,
+                        ntm2 == null || ntm2.ntShowName,
+                        ntm2 == null || ntm2.ntShowPlatform,
+                        ntm2 == null || ntm2.ntPlatformAsImg,
+                        ntm2 == null || ntm2.ntShowFps,
+                        ntm2 == null || ntm2.ntShowPing,
+                        ntm2?.ntMaxDist ?? 20f,
+                        ntm2?.ntFloatHeight ?? 0.42f
                     );
                 }
 

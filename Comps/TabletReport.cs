@@ -1403,11 +1403,40 @@ namespace YizziCamModV2.Comps
         /// Gorilla Tag: use game-synced ranked subtier fields when available, then SteamID64 / bounded props /
         /// Photon <see cref="RuntimePlatform"/> ints, then XR SDK mismatch from PC, then lobby-style defaults.
         /// </summary>
+        /// <summary>Public entry-point used by NameTagManager (same logic as internal DetectPlatform).</summary>
+        public static string DetectPlatformPublic(int actorNumber) => DetectPlatform(actorNumber);
+
         static string DetectPlatform(int actorNumber)
         {
             var player = FindPhotonPlayerByActor(actorNumber);
             if (player == null)
                 return GuessRemainderForKnownRemotePlayer(null);
+
+            // TooMuchInfo cosmetics-based platform cache (most accurate)
+            var rig2 = FindRigForActor(actorNumber);
+            var cachedPlatform = NameTagManager.GetCachedPlatform(rig2);
+            if (!string.IsNullOrEmpty(cachedPlatform))
+                return cachedPlatform;
+
+            // GT-native platform: game broadcasts each player's platform in custom properties.
+            if (player.CustomProperties != null)
+            {
+                if (player.CustomProperties.TryGetValue("platform", out var pv) && pv is string ps && ps.Length > 0)
+                {
+                    string psu = ps.ToUpperInvariant();
+                    if (psu.Contains("STEAM"))     return "STEAM";
+                    if (psu.Contains("OCULUS_PC") || psu.Contains("RIFT")) return "OCULUS PC";
+                    if (psu.Contains("QUEST"))     return "QUEST";
+                    if (psu.Contains("PSVR"))      return "PSVR";
+                    if (psu.Contains("PICO"))      return "PICO";
+                    return ps.Trim();
+                }
+                if (player.CustomProperties.ContainsKey("PLATFORM_STEAM"))    return "STEAM";
+                if (player.CustomProperties.ContainsKey("PLATFORM_OCULUS_PC")) return "OCULUS PC";
+                if (player.CustomProperties.ContainsKey("PLATFORM_QUEST"))    return "QUEST";
+                if (player.CustomProperties.ContainsKey("PLATFORM_PSVR"))     return "PSVR";
+                if (player.CustomProperties.ContainsKey("PLATFORM_PICO"))     return "PICO";
+            }
 
             var rig = FindRigForActor(actorNumber);
             if (TryPlatformFromGorillaRankedSubtiers(rig, out string rankedLabel))

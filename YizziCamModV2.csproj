@@ -128,6 +128,13 @@
     </Reference>
   </ItemGroup>
 
+  <!-- Exclude the NowPlayingHelper sub-project from this project's compile -->
+  <ItemGroup>
+    <Compile Remove="NowPlayingHelper\**" />
+    <EmbeddedResource Remove="NowPlayingHelper\**" />
+    <None Remove="NowPlayingHelper\**" />
+  </ItemGroup>
+
   <!-- Embedded asset bundles -->
   <ItemGroup>
     <EmbeddedResource Include="..\Assets\YizziCamModV2.Assets.colorscreen">
@@ -138,6 +145,15 @@
     </EmbeddedResource>
     <EmbeddedResource Include="..\Assets\Atlas.png">
       <LogicalName>YizziCamModV2.Assets.Atlas</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\Assets\platform_steam.png">
+      <LogicalName>YizziCamModV2.Assets.platform_steam</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\Assets\platform_meta.png">
+      <LogicalName>YizziCamModV2.Assets.platform_meta</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\Assets\platform_oculus_pc.png">
+      <LogicalName>YizziCamModV2.Assets.platform_oculus_pc</LogicalName>
     </EmbeddedResource>
   </ItemGroup>
 
@@ -154,11 +170,17 @@
       Condition="!Exists('$(GameDir)')" />
     <PropertyGroup Condition="Exists('$(GameDir)')">
       <_YizziPdb>$(TargetDir)$(TargetName).pdb</_YizziPdb>
+      <_NowPlayingOut>$(BepInExPluginsDir)\YizziNowPlaying</_NowPlayingOut>
     </PropertyGroup>
     <MakeDir Directories="$(BepInExPluginsDir)" Condition="Exists('$(GameDir)')" />
     <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(BepInExPluginsDir)\$(TargetFileName)" SkipUnchangedFiles="false" Condition="Exists('$(GameDir)')" />
     <Copy SourceFiles="$(_YizziPdb)" DestinationFolder="$(BepInExPluginsDir)" SkipUnchangedFiles="false" Condition="Exists('$(GameDir)') And Exists('$(_YizziPdb)')" />
     <Message Importance="high" Text="YizziCamModV2 → $(BepInExPluginsDir)\$(TargetFileName)" Condition="Exists('$(GameDir)')" />
+    <!-- Build and deploy the NowPlayingHelper (song-info query tool) -->
+    <Exec Command="C:\Users\Monk\.dotnet\dotnet.exe publish &quot;$(MSBuildThisFileDirectory)NowPlayingHelper\NowPlayingHelper.csproj&quot; -c Release -o &quot;$(_NowPlayingOut)&quot; --nologo -v q"
+          Condition="Exists('$(GameDir)')"
+          IgnoreExitCode="true" />
+    <Message Importance="high" Text="YizziNowPlaying → $(_NowPlayingOut)" Condition="Exists('$(GameDir)')" />
   </Target>
 
 </Project>

@@ -9,7 +9,9 @@ namespace YizziCamModV2
 
         public static void Save(int viewMode, float fov, bool watermark, float smoothing,
             int timePreset, bool rain, float nearClip, int summonInputMode, bool fpvRawRotation,
-            bool fpvClipping, float fpvClipLag)
+            bool fpvClipping, float fpvClipLag,
+            bool ntEnabled, bool ntShowName, bool ntShowPlatform, bool ntPlatformAsImg,
+            bool ntShowFps, bool ntShowPing, float ntMaxDist, float ntFloatHeight)
         {
             using (StreamWriter sw = new StreamWriter(FilePath))
             {
@@ -24,12 +26,22 @@ namespace YizziCamModV2
                 sw.WriteLine("fpvRawRotation=" + (fpvRawRotation ? "1" : "0"));
                 sw.WriteLine("fpvClipping=" + (fpvClipping ? "1" : "0"));
                 sw.WriteLine("fpvClipLag=" + fpvClipLag.ToString("F4"));
+                sw.WriteLine("ntEnabled=" + (ntEnabled ? "1" : "0"));
+                sw.WriteLine("ntShowName=" + (ntShowName ? "1" : "0"));
+                sw.WriteLine("ntShowPlatform=" + (ntShowPlatform ? "1" : "0"));
+                sw.WriteLine("ntPlatformAsImg=" + (ntPlatformAsImg ? "1" : "0"));
+                sw.WriteLine("ntShowFps=" + (ntShowFps ? "1" : "0"));
+                sw.WriteLine("ntShowPing=" + (ntShowPing ? "1" : "0"));
+                sw.WriteLine("ntMaxDist=" + ntMaxDist.ToString("F1"));
+                sw.WriteLine("ntFloatHeight=" + ntFloatHeight.ToString("F3"));
             }
         }
 
         public static bool Load(out int viewMode, out float fov, out bool watermark,
             out float smoothing, out int timePreset, out bool rain, out float nearClip, out int summonInputMode,
-            out bool fpvRawRotation, out bool fpvClipping, out float fpvClipLag)
+            out bool fpvRawRotation, out bool fpvClipping, out float fpvClipLag,
+            out bool ntEnabled, out bool ntShowName, out bool ntShowPlatform, out bool ntPlatformAsImg,
+            out bool ntShowFps, out bool ntShowPing, out float ntMaxDist, out float ntFloatHeight)
         {
             viewMode = 0;
             fov = 60f;
@@ -44,6 +56,14 @@ namespace YizziCamModV2
             fpvRawRotation = false;
             fpvClipping = false;
             fpvClipLag = 0.5f;
+            ntEnabled = false;
+            ntShowName = true;
+            ntShowPlatform = true;
+            ntPlatformAsImg = true;
+            ntShowFps = true;
+            ntShowPing = true;
+            ntMaxDist = 20f;
+            ntFloatHeight = 0.42f;
 
             if (!File.Exists(FilePath))
                 return false;
@@ -76,6 +96,14 @@ namespace YizziCamModV2
                     case "fpvRawRotation": fpvRawRotation = val == "1"; break;
                     case "fpvClipping": fpvClipping = val == "1"; break;
                     case "fpvClipLag": float.TryParse(val, out fpvClipLag); break;
+                    case "ntEnabled": ntEnabled = val == "1"; break;
+                    case "ntShowName": ntShowName = val == "1"; break;
+                    case "ntShowPlatform": ntShowPlatform = val == "1"; break;
+                    case "ntPlatformAsImg": ntPlatformAsImg = val == "1"; break;
+                    case "ntShowFps": ntShowFps = val == "1"; break;
+                    case "ntShowPing": ntShowPing = val == "1"; break;
+                    case "ntMaxDist": float.TryParse(val, out ntMaxDist); break;
+                    case "ntFloatHeight": float.TryParse(val, out ntFloatHeight); break;
                 }
             }
             if (!parsedSummonMode && legacyUseF6.HasValue)

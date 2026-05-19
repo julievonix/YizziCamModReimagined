@@ -1,14 +1,40 @@
-﻿using UnityEngine;
+﻿using System.Collections;
+using UnityEngine;
+using UnityEngine.UI;
 #pragma warning disable CS0618
 namespace YizziCamModV2.Comps
 {
     class YzGButton : MonoBehaviour
     {
+        // Briefly replaces the button label with "DONE!" then restores it.
+        void FlashDone()
+        {
+            var lbl = GetComponentInChildren<Text>(true);
+            if (lbl == null) return;
+            string orig = lbl.text;
+            lbl.text = "DONE!";
+            StartCoroutine(RestoreLabel(lbl, orig, 1.4f));
+        }
+
+        void FlashLabel(string msg)
+        {
+            var lbl = GetComponentInChildren<Text>(true);
+            if (lbl == null) return;
+            string orig = lbl.text;
+            lbl.text = msg;
+            StartCoroutine(RestoreLabel(lbl, orig, 1.4f));
+        }
+
+        IEnumerator RestoreLabel(Text lbl, string orig, float delay)
+        {
+            yield return new WaitForSeconds(delay);
+            if (lbl != null) lbl.text = orig;
+        }
         void Start()
         {
             this.gameObject.layer = 18;
         }
-        void OnEnable() { Invoke("ButtonTimer", 1f); }
+        void OnEnable() { Invoke("ButtonTimer", 0.3f); }
         void OnDisable() { CameraController.Instance.canbeused = false; }
         void ButtonTimer()
         {
@@ -23,7 +49,7 @@ namespace YizziCamModV2.Comps
             if (CameraController.Instance.canbeused && (col.name == "RightHandTriggerCollider" || col.name == "LeftHandTriggerCollider"))
             {
                 CameraController.Instance.canbeused = false;
-                Invoke("ButtonTimer", 1f);
+                Invoke("ButtonTimer", 0.3f);
                 switch (this.name)
                 {
                     case "BackButton":
@@ -44,7 +70,13 @@ namespace YizziCamModV2.Comps
                         // If something is pinned, act as a quick-access shortcut to it.
                         // If nothing is pinned, open the selector to choose what to pin.
                         if (CameraController.Instance.HasPinnedPage)
+                        {
+                            string pid = PlayerPrefs.GetString(CameraController.ExtraPinPrefKey, "");
                             CameraController.Instance.OpenPinnedShortcutFromMain();
+                            // Flash the button so the user sees the action fired
+                            if (pid == "LobbyHopBtn" || pid == "SaveSettsBtn")
+                                FlashLabel(pid == "LobbyHopBtn" ? "HOPPING!" : "SAVED!");
+                        }
                         else
                         {
                             CameraController.Instance.MainPage.SetActive(false);
@@ -53,7 +85,7 @@ namespace YizziCamModV2.Comps
                         }
                         break;
                     case "MainPinnedShortcutBtn":
-                        // "EXTRA OPTS" button — always opens the Extra Options grid
+                        // Always opens the Extra Options grid
                         CameraController.Instance.MainPage.SetActive(false);
                         CameraController.Instance.MiscPage.SetActive(false);
                         CameraController.Instance.ExtraPage.SetActive(true);
@@ -153,7 +185,7 @@ namespace YizziCamModV2.Comps
                         CameraController.Instance.ExtraPage.SetActive(false);
                         CameraController.Instance.CameraClipPage.SetActive(true);
                         if (CameraController.Instance.ClipLagStatusText != null)
-                            CameraController.Instance.ClipLagStatusText.text = CameraController.Instance.fpvClipping ? "CLIP LAGGING:ON" : "CLIP LAGGING:OFF";
+                            CameraController.Instance.ClipLagStatusText.text = CameraController.Instance.fpvClipping ? "CLIP:ON" : "CLIP:OFF";
                         if (CameraController.Instance.ClipLagValueText != null)
                             CameraController.Instance.ClipLagValueText.text = CameraController.Instance.fpvClipLag.ToString("F2");
                         CameraController.Instance.SyncSubPageUnpin("CameraClipBtn");
@@ -176,7 +208,9 @@ namespace YizziCamModV2.Comps
                         break;
                     case "SaveSettsBtn":
                         {
+                            FlashDone();
                             var ui = CameraController.Instance.GetComponent<UI>();
+                            var ntm = NameTagManager.Instance;
                             Settings.Save(
                                 CameraController.Instance.fpv ? 0 : CameraController.Instance.fp ? 1 : CameraController.Instance.tpv ? 2 : 3,
                                 CameraController.Instance.TabletCamera.fieldOfView,
@@ -188,11 +222,20 @@ namespace YizziCamModV2.Comps
                                 InputManager.instance.summonInputMode,
                                 CameraController.Instance.fpvRawRotation,
                                 CameraController.Instance.fpvClipping,
-                                CameraController.Instance.fpvClipLag
+                                CameraController.Instance.fpvClipLag,
+                                ntm != null && ntm.ntEnabled,
+                                ntm == null || ntm.ntShowName,
+                                ntm == null || ntm.ntShowPlatform,
+                                ntm == null || ntm.ntPlatformAsImg,
+                                ntm == null || ntm.ntShowFps,
+                                ntm == null || ntm.ntShowPing,
+                                ntm?.ntMaxDist ?? 20f,
+                                ntm?.ntFloatHeight ?? 0.42f
                             );
                         }
                         break;
                     case "LobbyHopBtn":
+                        FlashDone();
                         CameraController.Instance.LobbyHop();
                         break;
                     case "GridBtn_1_1":
@@ -233,6 +276,7 @@ namespace YizziCamModV2.Comps
                     case "RPHateSpeech":
                         if (TabletReport.Instance != null && TabletReport.Instance.IsInDetail)
                         {
+                            FlashDone();
                             var hsLine = TabletReport.Instance.FindScoreboardLine(TabletReport.Instance.DetailActorNumber);
                             if (hsLine != null) hsLine.PressButton(true, GorillaPlayerLineButton.ButtonType.HateSpeech);
                         }
@@ -240,6 +284,7 @@ namespace YizziCamModV2.Comps
                     case "RPToxicity":
                         if (TabletReport.Instance != null && TabletReport.Instance.IsInDetail)
                         {
+                            FlashDone();
                             var txLine = TabletReport.Instance.FindScoreboardLine(TabletReport.Instance.DetailActorNumber);
                             if (txLine != null) txLine.PressButton(true, GorillaPlayerLineButton.ButtonType.Toxicity);
                         }
@@ -247,6 +292,7 @@ namespace YizziCamModV2.Comps
                     case "RPCheating":
                         if (TabletReport.Instance != null && TabletReport.Instance.IsInDetail)
                         {
+                            FlashDone();
                             var chLine = TabletReport.Instance.FindScoreboardLine(TabletReport.Instance.DetailActorNumber);
                             if (chLine != null) chLine.PressButton(true, GorillaPlayerLineButton.ButtonType.Cheating);
                         }
@@ -306,6 +352,22 @@ namespace YizziCamModV2.Comps
                         if (CameraController.Instance.GenRawRotText != null)
                             CameraController.Instance.GenRawRotText.text = CameraController.Instance.fpvRawRotation ? "RAW ROTATION:ON" : "RAW ROTATION:OFF";
                         break;
+                    case "GenLockSummonBtn":
+                        CameraController.Instance.lockSummon = !CameraController.Instance.lockSummon;
+                        // If lock summon is turned off while the camera is locked, dismiss it now
+                        if (!CameraController.Instance.lockSummon && CameraController.Instance.lockSummonActive)
+                        {
+                            CameraController.Instance.lockSummonActive = false;
+                            CameraController.Instance.fp = false;
+                            CameraController.Instance.tpv = false;
+                            CameraController.Instance.fpv = true;
+                            CameraController.Instance.ResetTabletCamera();
+                            CameraController.Instance.SwitchToMainPage();
+                            CameraController.Instance.HideRigForFPV();
+                        }
+                        if (CameraController.Instance.GenLockSummonText != null)
+                            CameraController.Instance.GenLockSummonText.text = CameraController.Instance.lockSummon ? "LOCK SUM:ON" : "LOCK SUM:OFF";
+                        break;
                     case "GenWatermarkBtn":
                         {
                             var ui = CameraController.Instance.GetComponent<UI>();
@@ -318,6 +380,11 @@ namespace YizziCamModV2.Comps
                         CameraController.Instance.fpvRawRotation = !CameraController.Instance.fpvRawRotation;
                         if (CameraController.Instance.GenRawRotText != null)
                             CameraController.Instance.GenRawRotText.text = CameraController.Instance.fpvRawRotation ? "RAW ROTATION:ON" : "RAW ROTATION:OFF";
+                        break;
+                    case "GenRollLockBtn":
+                        CameraController.Instance.fpvRollLock = !CameraController.Instance.fpvRollLock;
+                        if (CameraController.Instance.GenRollLockText != null)
+                            CameraController.Instance.GenRollLockText.text = CameraController.Instance.fpvRollLock ? "ROLL:ON" : "ROLL:OFF";
                         break;
                     case "GenSummonBtn":
                         {
@@ -339,10 +406,42 @@ namespace YizziCamModV2.Comps
                             }
                         }
                         break;
+                    case "GenFpYMinusBtn":
+                        CameraController.Instance.fpvOffsetY = Mathf.Round((CameraController.Instance.fpvOffsetY - 0.01f) * 1000f) / 1000f;
+                        if (CameraController.Instance.GenFpYValueText != null)
+                            CameraController.Instance.GenFpYValueText.text = $"Y:{CameraController.Instance.fpvOffsetY:F2}";
+                        break;
+                    case "GenFpYPlusBtn":
+                        CameraController.Instance.fpvOffsetY = Mathf.Round((CameraController.Instance.fpvOffsetY + 0.01f) * 1000f) / 1000f;
+                        if (CameraController.Instance.GenFpYValueText != null)
+                            CameraController.Instance.GenFpYValueText.text = $"Y:{CameraController.Instance.fpvOffsetY:F2}";
+                        break;
+                    case "GenFpZMinusBtn":
+                        CameraController.Instance.fpvOffsetZ = Mathf.Round((CameraController.Instance.fpvOffsetZ - 0.01f) * 1000f) / 1000f;
+                        if (CameraController.Instance.GenFpZValueText != null)
+                            CameraController.Instance.GenFpZValueText.text = $"Z:{CameraController.Instance.fpvOffsetZ:F2}";
+                        break;
+                    case "GenFpZPlusBtn":
+                        CameraController.Instance.fpvOffsetZ = Mathf.Round((CameraController.Instance.fpvOffsetZ + 0.01f) * 1000f) / 1000f;
+                        if (CameraController.Instance.GenFpZValueText != null)
+                            CameraController.Instance.GenFpZValueText.text = $"Z:{CameraController.Instance.fpvOffsetZ:F2}";
+                        break;
+                    case "CamHideHeadBtn":
+                        CameraController.Instance.fpvHideHead = !CameraController.Instance.fpvHideHead;
+                        CameraController.Instance.ApplyHideHead(CameraController.Instance.fpvHideHead);
+                        if (CameraController.Instance.CamHideHeadText != null)
+                            CameraController.Instance.CamHideHeadText.text = CameraController.Instance.fpvHideHead ? "HEAD:ON" : "HEAD:OFF";
+                        break;
+                    case "CamHideFaceCosBtn":
+                        CameraController.Instance.fpvHideFaceCosmetics = !CameraController.Instance.fpvHideFaceCosmetics;
+                        CameraController.Instance.ApplyHideFaceCosmetics(CameraController.Instance.fpvHideFaceCosmetics);
+                        if (CameraController.Instance.CamHideFaceCosText != null)
+                            CameraController.Instance.CamHideFaceCosText.text = CameraController.Instance.fpvHideFaceCosmetics ? "COSM:ON" : "COSM:OFF";
+                        break;
                     case "CCToggleBtn":
                         CameraController.Instance.fpvClipping = !CameraController.Instance.fpvClipping;
                         if (CameraController.Instance.ClipLagStatusText != null)
-                            CameraController.Instance.ClipLagStatusText.text = CameraController.Instance.fpvClipping ? "CLIP LAGGING:ON" : "CLIP LAGGING:OFF";
+                            CameraController.Instance.ClipLagStatusText.text = CameraController.Instance.fpvClipping ? "CLIP:ON" : "CLIP:OFF";
                         var toggleLabel = this.GetComponentInChildren<UnityEngine.UI.Text>(true);
                         if (toggleLabel != null) toggleLabel.text = CameraController.Instance.fpvClipping ? "ON" : "OFF";
                         break;
@@ -367,6 +466,111 @@ namespace YizziCamModV2.Comps
                         }
                         CameraController.Instance.SyncSubPageUnpin("MusicBtn");
                         break;
+                    case "NameTagBtn":
+                        CameraController.Instance.ExtraPage.SetActive(false);
+                        if (CameraController.Instance.NameTagsPage != null)
+                        {
+                            CameraController.Instance.NameTagsPage.SetActive(true);
+                            CameraController.Instance.SyncNameTagsPageTexts();
+                            CameraController.Instance.SyncSubPageUnpin("NameTagBtn");
+                        }
+                        break;
+                    case "PS_NameTagBtn":
+                        CameraController.Instance.PinExtraChoice("NameTagBtn");
+                        if (CameraController.Instance.PinSelectorPage != null)
+                            CameraController.Instance.PinSelectorPage.SetActive(false);
+                        CameraController.Instance.MainPage.SetActive(true);
+                        break;
+                    case "NTBackButton":
+                        if (CameraController.Instance.NameTagsPage != null)
+                            CameraController.Instance.NameTagsPage.SetActive(false);
+                        CameraController.Instance.ExtraPage.SetActive(true);
+                        CameraController.Instance.SyncExtraPageUnpin();
+                        break;
+                    // ── Name Tags sub-page toggles ────────────────────────────────────────
+                    case "NTMasterBtn":
+                        {
+                            var ntm = NameTagManager.Instance;
+                            if (ntm == null) break;
+                            ntm.ntEnabled = !ntm.ntEnabled;
+                            ntm.RefreshAllTags();
+                            CameraController.Instance.SyncNameTagsPageTexts();
+                        }
+                        break;
+                    case "NTShowNameBtn":
+                        {
+                            var ntm = NameTagManager.Instance;
+                            if (ntm == null) break;
+                            ntm.ntShowName = !ntm.ntShowName;
+                            CameraController.Instance.SyncNameTagsPageTexts();
+                        }
+                        break;
+                    case "NTShowPlatBtn":
+                        {
+                            var ntm = NameTagManager.Instance;
+                            if (ntm == null) break;
+                            ntm.ntShowPlatform = !ntm.ntShowPlatform;
+                            CameraController.Instance.SyncNameTagsPageTexts();
+                        }
+                        break;
+                    case "NTPlatModeBtn":
+                        {
+                            var ntm = NameTagManager.Instance;
+                            if (ntm == null) break;
+                            ntm.ntPlatformAsImg = !ntm.ntPlatformAsImg;
+                            CameraController.Instance.SyncNameTagsPageTexts();
+                        }
+                        break;
+                    case "NTShowFpsBtn":
+                        {
+                            var ntm = NameTagManager.Instance;
+                            if (ntm == null) break;
+                            ntm.ntShowFps = !ntm.ntShowFps;
+                            CameraController.Instance.SyncNameTagsPageTexts();
+                        }
+                        break;
+                    case "NTShowPingBtn":
+                        {
+                            var ntm = NameTagManager.Instance;
+                            if (ntm == null) break;
+                            ntm.ntShowPing = !ntm.ntShowPing;
+                            CameraController.Instance.SyncNameTagsPageTexts();
+                        }
+                        break;
+                    case "NTDistMinusBtn":
+                        {
+                            var ntm = NameTagManager.Instance;
+                            if (ntm == null) break;
+                            ntm.ntMaxDist = Mathf.Max(4f, ntm.ntMaxDist - 2f);
+                            CameraController.Instance.SyncNameTagsPageTexts();
+                        }
+                        break;
+                    case "NTDistPlusBtn":
+                        {
+                            var ntm = NameTagManager.Instance;
+                            if (ntm == null) break;
+                            ntm.ntMaxDist = Mathf.Min(50f, ntm.ntMaxDist + 2f);
+                            CameraController.Instance.SyncNameTagsPageTexts();
+                        }
+                        break;
+                    case "NTFloatMinusBtn":
+                        {
+                            var ntm = NameTagManager.Instance;
+                            if (ntm == null) break;
+                            ntm.ntFloatHeight = Mathf.Max(0.10f, ntm.ntFloatHeight - 0.05f);
+                            CameraController.Instance.SyncNameTagsPageTexts();
+                            CameraController.Instance.canbeused = true;
+                        }
+                        break;
+                    case "NTFloatPlusBtn":
+                        {
+                            var ntm = NameTagManager.Instance;
+                            if (ntm == null) break;
+                            ntm.ntFloatHeight = Mathf.Min(1.50f, ntm.ntFloatHeight + 0.05f);
+                            CameraController.Instance.SyncNameTagsPageTexts();
+                            CameraController.Instance.canbeused = true;
+                        }
+                        break;
                     case "MusicBackButton":
                         if (CameraController.Instance.MusicPage != null)
                             CameraController.Instance.MusicPage.SetActive(false);
@@ -374,6 +578,7 @@ namespace YizziCamModV2.Comps
                         CameraController.Instance.SyncExtraPageUnpin();
                         break;
                     case "MusicPlayPauseBtn":
+                        FlashDone();
                         CameraController.Instance.SendMediaKeyPublic(CameraController.MK_PLAY_PAUSE);
                         break;
                     case "MusicPrevBtn":
@@ -391,6 +596,7 @@ namespace YizziCamModV2.Comps
                         CameraController.Instance.canbeused = true;
                         break;
                     case "MusicMuteBtn":
+                        FlashDone();
                         CameraController.Instance.SendMediaKeyPublic(CameraController.MK_MUTE);
                         break;
                     case "WTDawnBtn":
@@ -473,6 +679,7 @@ namespace YizziCamModV2.Comps
                                 CameraController.Instance.TabletCameraGO.transform.Rotate(0.0f, 180f, 0.0f);
                             }
                         }
+                        CameraController.Instance.lockSummonActive = false;
                         CameraController.Instance.fp = false;
                         CameraController.Instance.fpv = false;
                         CameraController.Instance.tpv = true;
@@ -484,6 +691,7 @@ namespace YizziCamModV2.Comps
                             CameraController.Instance.ThirdPersonCameraGO.transform.Rotate(0.0f, 180f, 0.0f);
                             CameraController.Instance.TabletCameraGO.transform.Rotate(0.0f, 180f, 0.0f);
                         }
+                        CameraController.Instance.lockSummonActive = false;
                         CameraController.Instance.fp = false;
                         CameraController.Instance.fpv = true;
                         break;
@@ -537,6 +745,7 @@ namespace YizziCamModV2.Comps
                         CameraController.Instance.canbeused = true;
                         break;
                     case "FPButton":
+                        CameraController.Instance.lockSummonActive = false;
                         CameraController.Instance.fp = !CameraController.Instance.fp;
                         break;
                     case "MinDistDownButton":
