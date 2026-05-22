@@ -768,15 +768,29 @@ namespace YizziCamModV2
                 }
                 if (tpv && !lockSummonActive)
                 {
-                    // Always hide the tablet body in TPV so it never occludes the feed.
-                    if (MainPage.activeSelf)
+                    if (!camDisconnect)
                     {
-                        foreach (MeshRenderer mr in meshRenderers)
-                            mr.enabled = false;
-                        MainPage.SetActive(false);
+                        // Pure TPV — hide tablet so it doesn't float in the feed
+                        if (MainPage.activeSelf)
+                        {
+                            foreach (MeshRenderer mr in meshRenderers)
+                                mr.enabled = false;
+                            MainPage.SetActive(false);
+                        }
+                        if (FakeCameraGO != null && FakeCameraGO.activeSelf)
+                            FakeCameraGO.SetActive(false);
                     }
-                    if (FakeCameraGO != null && FakeCameraGO.activeSelf)
-                        FakeCameraGO.SetActive(false);
+                    else
+                    {
+                        // cam-dis + TPV — keep the camera model visible so the user can
+                        // still see and touch it; FPV mode may have hidden it already
+                        foreach (MeshRenderer mr in meshRenderers)
+                            mr.enabled = true;
+                        if (MainPage != null && !MainPage.activeSelf)
+                            MainPage.SetActive(true);
+                        if (FakeCameraGO != null && !FakeCameraGO.activeSelf)
+                            FakeCameraGO.SetActive(true);
+                    }
 
                     var tpvPivot = followheadrot ? CameraFollower.transform : TPVBodyFollower.transform;
                     // Position above centre of player, slightly offset in depth
