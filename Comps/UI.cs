@@ -33,7 +33,7 @@ namespace YizziCamModV2.Comps
         bool specOffsetOpen;
         public bool raining;
         public int timePreset = 1;
-        bool pendingTimeWeather;
+        public bool pendingTimeWeather;
         GUIStyle watermarkStyle;
         GameObject followobject;
         BetterDayNightManager dayNightManager;
@@ -135,6 +135,11 @@ namespace YizziCamModV2.Comps
                     cc.MainPage.active = true;
                 }
             }
+
+            // Auto-load last used profile (saved via PlayerPrefs by LoadProfile)
+            int lastSlot = PlayerPrefs.GetInt("YizziLastProfileSlot", -1);
+            if (lastSlot >= 0 && lastSlot < CameraController.ProfileSlotCount)
+                CameraController.Instance?.LoadProfile(lastSlot);
         }
 
         // Pending name tag settings if NameTagManager wasn't ready when settings loaded

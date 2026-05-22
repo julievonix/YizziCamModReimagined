@@ -43,9 +43,16 @@ namespace YizziCamModV2
         public Text ClipLagValueText;
         public Text ClipLagStatusText;
         public GameObject GeneralPage;
+        public GameObject ThemesPage;
+        public bool       _customAtlasActive = true;
+        public Text       ThemeTabletText;
+        // Stores the original atlas texture per material so we can restore it
+        readonly List<(Material mat, Texture orig)> _atlasOriginals = new List<(Material, Texture)>();
+        Texture2D _customAtlasTex;
         public GameObject ReportPage;
         public GameObject MusicPage;
         public GameObject PinSelectorPage;
+        public GameObject ProfilePage;
         public GameObject ExtraPageUnpinButton;
         Text MusicSongNameText;
         Text MusicTimeText;
@@ -63,6 +70,8 @@ namespace YizziCamModV2
         public Text GenRawRotText;
         public Text GenSummonText;
         public Text GenCamDisText;
+        public Text GenProfileText;
+        int _activeProfileSlot = -1;
         public Text GenRollLockText;
         public Text GenFpYValueText;
         public Text GenFpZValueText;
@@ -78,6 +87,250 @@ namespace YizziCamModV2
         public List<MeshRenderer> meshRenderers = new List<MeshRenderer>();
 
         public const string ExtraPinPrefKey = "YizziExtraPin";
+
+        // ── Profile system ────────────────────────────────────────────────────────
+        public const int ProfileSlotCount = 4;
+
+        static string ProfilesFolder =>
+            System.IO.Path.Combine(
+                System.IO.Path.GetDirectoryName(
+                    System.Reflection.Assembly.GetExecutingAssembly().Location),
+                "YizziCamProfiles");
+
+        static string ProfilePath(int slot) =>
+            System.IO.Path.Combine(ProfilesFolder, $"Profile{slot + 1}.json");
+
+        class CamProfile
+        {
+            // Camera
+            public float  fpvOffsetY       = 0f;
+            public float  fpvOffsetZ       = 0f;
+            public bool   fpvRollLock      = false;
+            public bool   fpvClipping      = false;
+            public float  fpvClipLag       = 0.5f;
+            public bool   fpvHideHead      = false;
+            public bool   fpvHideCosmetics = false;
+            public bool   camDisconnect    = false;
+            public bool   fpvRawRotation   = false;
+            public bool   lockSummon       = false;
+            public float  smoothing        = 0.05f;
+            // World / UI
+            public bool   showWatermark    = true;
+            public bool   raining          = false;
+            public int    timePreset       = 1;
+            // Name tags
+            public bool   ntEnabled        = false;
+            public bool   ntShowName       = true;
+            public bool   ntShowPlatform   = true;
+            public bool   ntPlatformAsImg  = true;
+            public bool   ntShowFps        = true;
+            public bool   ntShowPing       = true;
+            public float  ntMaxDist        = 20f;
+            public float  ntFloatHeight    = 0.42f;
+
+            static string B(bool v) => v ? "1" : "0";
+            static bool   PB(string v) => v == "1";
+
+            public void WriteTo(string path)
+            {
+                using var sw = new StreamWriter(path);
+                sw.WriteLine("fpvOffsetY="      + fpvOffsetY.ToString("F4"));
+                sw.WriteLine("fpvOffsetZ="      + fpvOffsetZ.ToString("F4"));
+                sw.WriteLine("fpvRollLock="     + B(fpvRollLock));
+                sw.WriteLine("fpvClipping="     + B(fpvClipping));
+                sw.WriteLine("fpvClipLag="      + fpvClipLag.ToString("F4"));
+                sw.WriteLine("fpvHideHead="     + B(fpvHideHead));
+                sw.WriteLine("fpvHideCosmetics="+ B(fpvHideCosmetics));
+                sw.WriteLine("camDisconnect="   + B(camDisconnect));
+                sw.WriteLine("fpvRawRotation="  + B(fpvRawRotation));
+                sw.WriteLine("lockSummon="      + B(lockSummon));
+                sw.WriteLine("smoothing="       + smoothing.ToString("F4"));
+                sw.WriteLine("showWatermark="   + B(showWatermark));
+                sw.WriteLine("raining="         + B(raining));
+                sw.WriteLine("timePreset="      + timePreset);
+                sw.WriteLine("ntEnabled="       + B(ntEnabled));
+                sw.WriteLine("ntShowName="      + B(ntShowName));
+                sw.WriteLine("ntShowPlatform="  + B(ntShowPlatform));
+                sw.WriteLine("ntPlatformAsImg=" + B(ntPlatformAsImg));
+                sw.WriteLine("ntShowFps="       + B(ntShowFps));
+                sw.WriteLine("ntShowPing="      + B(ntShowPing));
+                sw.WriteLine("ntMaxDist="       + ntMaxDist.ToString("F1"));
+                sw.WriteLine("ntFloatHeight="   + ntFloatHeight.ToString("F4"));
+            }
+
+            public static CamProfile ReadFrom(string path)
+            {
+                var p = new CamProfile();
+                foreach (var line in File.ReadAllLines(path))
+                {
+                    int eq = line.IndexOf('=');
+                    if (eq < 0) continue;
+                    string key = line.Substring(0, eq).Trim();
+                    string val = line.Substring(eq + 1).Trim();
+                    switch (key)
+                    {
+                        case "fpvOffsetY":       float.TryParse(val, out p.fpvOffsetY);       break;
+                        case "fpvOffsetZ":       float.TryParse(val, out p.fpvOffsetZ);       break;
+                        case "fpvRollLock":      p.fpvRollLock      = PB(val);                break;
+                        case "fpvClipping":      p.fpvClipping      = PB(val);                break;
+                        case "fpvClipLag":       float.TryParse(val, out p.fpvClipLag);       break;
+                        case "fpvHideHead":      p.fpvHideHead      = PB(val);                break;
+                        case "fpvHideCosmetics": p.fpvHideCosmetics = PB(val);                break;
+                        case "camDisconnect":    p.camDisconnect    = PB(val);                break;
+                        case "fpvRawRotation":   p.fpvRawRotation   = PB(val);                break;
+                        case "lockSummon":       p.lockSummon       = PB(val);                break;
+                        case "smoothing":        float.TryParse(val, out p.smoothing);        break;
+                        case "showWatermark":    p.showWatermark    = PB(val);                break;
+                        case "raining":          p.raining          = PB(val);                break;
+                        case "timePreset":       int.TryParse(val, out p.timePreset);         break;
+                        case "ntEnabled":        p.ntEnabled        = PB(val);                break;
+                        case "ntShowName":       p.ntShowName       = PB(val);                break;
+                        case "ntShowPlatform":   p.ntShowPlatform   = PB(val);                break;
+                        case "ntPlatformAsImg":  p.ntPlatformAsImg  = PB(val);                break;
+                        case "ntShowFps":        p.ntShowFps        = PB(val);                break;
+                        case "ntShowPing":       p.ntShowPing       = PB(val);                break;
+                        case "ntMaxDist":        float.TryParse(val, out p.ntMaxDist);        break;
+                        case "ntFloatHeight":    float.TryParse(val, out p.ntFloatHeight);    break;
+                    }
+                }
+                return p;
+            }
+        }
+
+        // Label texts shown on the profile page slots
+        readonly Text[] _profileSlotLabels = new Text[ProfileSlotCount];
+
+        void EnsureProfilesFolder()
+        {
+            try { if (!System.IO.Directory.Exists(ProfilesFolder)) System.IO.Directory.CreateDirectory(ProfilesFolder); }
+            catch { }
+        }
+
+        public void SaveProfile(int slot)
+        {
+            EnsureProfilesFolder();
+            var ui = GetComponent<Comps.UI>();
+            var p = new CamProfile
+            {
+                fpvOffsetY       = fpvOffsetY,
+                fpvOffsetZ       = fpvOffsetZ,
+                fpvRollLock      = fpvRollLock,
+                fpvClipping      = fpvClipping,
+                fpvClipLag       = fpvClipLag,
+                fpvHideHead      = fpvHideHead,
+                fpvHideCosmetics = fpvHideFaceCosmetics,
+                camDisconnect    = camDisconnect,
+                fpvRawRotation   = fpvRawRotation,
+                lockSummon       = lockSummon,
+                smoothing        = smoothing,
+                showWatermark    = ui?.showWatermark ?? true,
+                raining          = ui?.raining ?? false,
+                timePreset       = ui?.timePreset ?? 1,
+                ntEnabled        = NameTagManager.Instance?.ntEnabled ?? false,
+                ntShowName       = NameTagManager.Instance?.ntShowName ?? true,
+                ntShowPlatform   = NameTagManager.Instance?.ntShowPlatform ?? true,
+                ntPlatformAsImg  = NameTagManager.Instance?.ntPlatformAsImg ?? true,
+                ntShowFps        = NameTagManager.Instance?.ntShowFps ?? true,
+                ntShowPing       = NameTagManager.Instance?.ntShowPing ?? true,
+                ntMaxDist        = NameTagManager.Instance?.ntMaxDist ?? 20f,
+                ntFloatHeight    = NameTagManager.Instance?.ntFloatHeight ?? 0.42f,
+            };
+            try { p.WriteTo(ProfilePath(slot)); }
+            catch { }
+            RefreshProfileLabels();
+        }
+
+        public void LoadProfile(int slot)
+        {
+            string path = ProfilePath(slot);
+            if (!System.IO.File.Exists(path)) return;
+            CamProfile p;
+            try { p = CamProfile.ReadFrom(path); }
+            catch { return; }
+            _activeProfileSlot = slot;
+            PlayerPrefs.SetInt("YizziLastProfileSlot", slot);
+            PlayerPrefs.Save();
+
+            // Camera fields
+            fpvOffsetY           = p.fpvOffsetY;
+            fpvOffsetZ           = p.fpvOffsetZ;
+            fpvRollLock          = p.fpvRollLock;
+            fpvClipping          = p.fpvClipping;
+            fpvClipLag           = p.fpvClipLag;
+            fpvHideHead          = p.fpvHideHead;
+            fpvHideFaceCosmetics = p.fpvHideCosmetics;
+            camDisconnect        = p.camDisconnect;
+            fpvRawRotation       = p.fpvRawRotation;
+            lockSummon           = p.lockSummon;
+            smoothing            = p.smoothing;
+
+            // Apply hide-head state
+            ApplyHideHead(fpvHideHead);
+
+            // World / UI fields
+            var ui = GetComponent<Comps.UI>();
+            if (ui != null)
+            {
+                ui.showWatermark      = p.showWatermark;
+                ui.raining            = p.raining;
+                ui.timePreset         = p.timePreset;
+                ui.pendingTimeWeather = true;
+            }
+
+            // Name tag fields
+            if (NameTagManager.Instance != null)
+            {
+                NameTagManager.Instance.ntEnabled       = p.ntEnabled;
+                NameTagManager.Instance.ntShowName      = p.ntShowName;
+                NameTagManager.Instance.ntShowPlatform  = p.ntShowPlatform;
+                NameTagManager.Instance.ntPlatformAsImg = p.ntPlatformAsImg;
+                NameTagManager.Instance.ntShowFps       = p.ntShowFps;
+                NameTagManager.Instance.ntShowPing      = p.ntShowPing;
+                NameTagManager.Instance.ntMaxDist       = Mathf.Min(20f, p.ntMaxDist);
+                NameTagManager.Instance.ntFloatHeight   = p.ntFloatHeight;
+                NameTagManager.Instance.RefreshAllTags();
+            }
+
+            // Sync all UI status texts
+            if (ClipLagStatusText  != null) ClipLagStatusText.text  = fpvClipping ? "CLIP:ON" : "CLIP:OFF";
+            if (ClipLagValueText   != null) ClipLagValueText.text   = fpvClipLag.ToString("F2");
+            if (GenFpZValueText    != null) GenFpZValueText.text    = $"Z:{fpvOffsetZ:F2}";
+            if (GenFpYValueText    != null) GenFpYValueText.text    = $"Y:{fpvOffsetY:F2}";
+            if (CamHideHeadText    != null) CamHideHeadText.text    = fpvHideHead ? "HEAD:ON" : "HEAD:OFF";
+            if (CamHideFaceCosText != null) CamHideFaceCosText.text = fpvHideFaceCosmetics ? "COSM:ON" : "COSM:OFF";
+            if (GenRollLockText    != null) GenRollLockText.text    = fpvRollLock ? "ROLL:ON" : "ROLL:OFF";
+            SyncGeneralPageStatusTexts();
+            RefreshGenProfileLabel();
+        }
+
+        public void DeleteProfile(int slot)
+        {
+            try { if (System.IO.File.Exists(ProfilePath(slot))) System.IO.File.Delete(ProfilePath(slot)); }
+            catch { }
+            if (_activeProfileSlot == slot) { _activeProfileSlot = -1; RefreshGenProfileLabel(); }
+            RefreshProfileLabels();
+        }
+
+        void RefreshProfileLabels()
+        {
+            for (int i = 0; i < ProfileSlotCount; i++)
+            {
+                if (_profileSlotLabels[i] == null) continue;
+                bool exists = System.IO.File.Exists(ProfilePath(i));
+                _profileSlotLabels[i].text = exists ? $"SLOT {i + 1}: SAVED" : $"SLOT {i + 1}: EMPTY";
+                _profileSlotLabels[i].color = exists
+                    ? new Color(0.4f, 1f, 0.4f)
+                    : new Color(0.55f, 0.55f, 0.55f);
+            }
+        }
+
+        void RefreshGenProfileLabel()
+        {
+            if (GenProfileText == null) return;
+            GenProfileText.text = _activeProfileSlot >= 0
+                ? $"SLOT: {_activeProfileSlot + 1}"
+                : "SLOT: NONE";
+        }
 
         /// <summary>Gorilla-style UI tint (requested <c>rgb(251,254,13)</c> ≈ <c>hsl(61,83%,47%)</c>).</summary>
         static readonly Color TabletLabelYellow = new Color(251f / 255f, 254f / 255f, 13f / 255f);
@@ -134,6 +387,19 @@ namespace YizziCamModV2
         public bool lockSummon = false;
         public bool lockSummonActive = false;
         bool _prevTeleportCamera;
+
+        // ── Throw-physics state (velocity-based: swipe hand through camera model) ─
+        bool    _camThrowing;
+        float   _camThrowTimer;
+        Vector3 _camThrowVel;
+        Vector3 _camThrowAngVel;         // random tumble set at throw-start
+        Vector3    _fakeCamBaseScale;       // FakeCameraGO original scale (set once)
+        Quaternion _fakeCamBaseRot;         // FakeCameraGO original local rotation (set once)
+        Vector3 _camTabletBaseScale;     // CameraTablet original scale (set once)
+        // Per-hand position tracking for velocity estimation
+        bool    _camHandPosReady;
+        Vector3 _prevRightHandPos;
+        Vector3 _prevLeftHandPos;
         public Text GenLockSummonText;
         public Text CamHideHeadText;
         public Text CamHideFaceCosText;
@@ -197,6 +463,9 @@ namespace YizziCamModV2
             tabletCamDefaultLocalRot = TabletCameraGO.transform.localRotation;
             FakeCameraGO = GameObject.Find("CameraTablet(Clone)/FakeCamera");
             FakeCameraGO.transform.localPosition = new Vector3(0f, 0.55f, 0.1f);
+            _fakeCamBaseScale    = FakeCameraGO.transform.localScale;
+            _fakeCamBaseRot      = FakeCameraGO.transform.localRotation;
+            _camTabletBaseScale  = CameraTablet.transform.localScale;
             LeftGrabCol = GameObject.Find("CameraTablet(Clone)/LeftGrabCol");
             RightGrabCol = GameObject.Find("CameraTablet(Clone)/RightGrabCol");
             LeftGrabCol.AddComponent<LeftGrabTrigger>();
@@ -406,12 +675,24 @@ namespace YizziCamModV2
                 {
                     if (lockSummonActive)
                     {
+                        // Cancel any in-flight throw before dismissing
+                        if (_camThrowing)
+                        {
+                            CameraTablet.transform.localScale    = _camTabletBaseScale;
+                            CameraTablet.transform.localRotation = Quaternion.identity;
+                            CameraTablet.transform.localScale    = _camTabletBaseScale;
+                            CameraTablet.transform.localRotation = Quaternion.identity;
+                            FakeCameraGO.transform.localPosition = new Vector3(0f, 0.55f, 0.1f);
+                            FakeCameraGO.transform.localRotation = _fakeCamBaseRot;
+                            FakeCameraGO.transform.localScale    = _fakeCamBaseScale;
+                            _camThrowing = false;
+                        }
                         // Dismiss: close every open page then hide the tablet entirely
                         lockSummonActive = false;
                         fp = false; tpv = false; fpv = true;
                         ResetTabletCamera();
-                        SwitchToMainPage();  // ensures every sub-page (GeneralPage, MiscPage, etc.) is closed
-                        HideRigForFPV();     // disables meshRenderers, hides MainPage + remaining pages
+                        SwitchToMainPage();
+                        HideRigForFPV();
                     }
                     else
                     {
@@ -420,7 +701,7 @@ namespace YizziCamModV2
                         fp = false; tpv = false; fpv = false;
                         ResetTabletCamera();
                         if (!FakeCameraGO.activeSelf) FakeCameraGO.SetActive(true);
-                        SwitchToMainPage();
+                        SummonToLastPage();
                         var head = Player.Instance.headCollider.transform;
                         var flatFwd = new Vector3(head.forward.x, 0f, head.forward.z);
                         if (flatFwd.sqrMagnitude < 0.0001f) flatFwd = Vector3.forward;
@@ -438,7 +719,7 @@ namespace YizziCamModV2
                     fpv = false;
                     ResetTabletCamera();
                     if (!FakeCameraGO.activeSelf) FakeCameraGO.SetActive(true);
-                    SwitchToMainPage();
+                    SummonToLastPage();
 
                     // Place in front of the player, facing them
                     var head = Player.Instance.headCollider.transform;
@@ -452,17 +733,23 @@ namespace YizziCamModV2
                 // side-to-side (yaw) turns will gradually reposition it.
                 if (lockSummonActive && CameraTablet.transform.parent == null)
                 {
-                    // Tablet body: smooth yaw-only follow (ignores pitch)
-                    // Cam-dis lens tracking is handled by the unconditional block at the end.
-                    var lsHead = Player.Instance.headCollider.transform;
-                    var flatFwd = new Vector3(lsHead.forward.x, 0f, lsHead.forward.z);
-                    if (flatFwd.sqrMagnitude < 0.0001f) flatFwd = Vector3.forward;
-                    else flatFwd.Normalize();
-                    Vector3 targetPos = lsHead.position + flatFwd * 0.5f;
-                    CameraTablet.transform.position = Vector3.Lerp(
-                        CameraTablet.transform.position, targetPos, 0.03f);
-                    CameraTablet.transform.rotation = Quaternion.Slerp(
-                        CameraTablet.transform.rotation, Quaternion.LookRotation(flatFwd), 0.03f);
+                    // Handle grab & throw of the camera model
+                    UpdateCamThrow();
+
+                    // While tablet is in mid-throw, skip the follow code so physics wins
+                    if (!_camThrowing)
+                    {
+                        // Tablet body: smooth yaw-only follow (ignores pitch)
+                        var lsHead  = Player.Instance.headCollider.transform;
+                        var flatFwd = new Vector3(lsHead.forward.x, 0f, lsHead.forward.z);
+                        if (flatFwd.sqrMagnitude < 0.0001f) flatFwd = Vector3.forward;
+                        else flatFwd.Normalize();
+                        Vector3 targetPos = lsHead.position + flatFwd * 0.5f;
+                        CameraTablet.transform.position = Vector3.Lerp(
+                            CameraTablet.transform.position, targetPos, 0.03f);
+                        CameraTablet.transform.rotation = Quaternion.Slerp(
+                            CameraTablet.transform.rotation, Quaternion.LookRotation(flatFwd), 0.03f);
+                    }
                 }
                 if (fp && !lockSummonActive)
                 {
@@ -481,60 +768,52 @@ namespace YizziCamModV2
                 }
                 if (tpv && !lockSummonActive)
                 {
+                    // Always hide the tablet body in TPV so it never occludes the feed.
                     if (MainPage.activeSelf)
                     {
                         foreach (MeshRenderer mr in meshRenderers)
-                        {
                             mr.enabled = false;
-                        }
                         MainPage.SetActive(false);
                     }
+                    if (FakeCameraGO != null && FakeCameraGO.activeSelf)
+                        FakeCameraGO.SetActive(false);
+
+                    var tpvPivot = followheadrot ? CameraFollower.transform : TPVBodyFollower.transform;
+                    // Position above centre of player, slightly offset in depth
                     if (TPVMode == TPVModes.BACK)
-                    {
-                        if (followheadrot)
-                        {
-                            targetPosition = CameraFollower.transform.TransformPoint(new Vector3(0.3f, 0.1f, -1.5f));
-                        }
-                        else
-                        {
-                            targetPosition = TPVBodyFollower.transform.TransformPoint(new Vector3(0.3f, 0.1f, -1.5f));
-                        }
-                        CameraTablet.transform.position = Vector3.SmoothDamp(CameraTablet.transform.position, targetPosition, ref velocity, 0.1f);
-                        CameraTablet.transform.LookAt(CameraFollower.transform.position);
-                    }
-                    else if (TPVMode == TPVModes.FRONT)
-                    {
-                        if (followheadrot)
-                        {
-                            targetPosition = CameraFollower.transform.TransformPoint(new Vector3(0.1f, 0.3f, 2.5f));
-                        }
-                        else
-                        {
-                            targetPosition = TPVBodyFollower.transform.TransformPoint(new Vector3(0.1f, 0.3f, 2.5f));
-                        }
-                        CameraTablet.transform.position = Vector3.SmoothDamp(CameraTablet.transform.position, targetPosition, ref velocity, 0.1f);
-                        CameraTablet.transform.LookAt(2f * CameraTablet.transform.position - CameraFollower.transform.position);
-                    }
+                        targetPosition = tpvPivot.TransformPoint(new Vector3(0f, 0.2f, -1.0f));
+                    else
+                        targetPosition = tpvPivot.TransformPoint(new Vector3(0f, 0.2f, 1.0f));
+                    CameraTablet.transform.position = Vector3.SmoothDamp(
+                        CameraTablet.transform.position, targetPosition, ref velocity, 0.1f);
+
+                    // Explicitly set both camera world positions and rotations every frame
+                    // so the feed shows the correct third-person view regardless of any
+                    // local rotation state left over from FPV or cam-dis modes.
+                    // The cam-dis block below will override these if cam-dis is also on.
+                    Vector3 tpvLookTarget = tpvPivot.TransformPoint(new Vector3(0f, 0.1f, 0f));
+                    TabletCameraGO.transform.position    = CameraTablet.transform.position;
+                    TabletCameraGO.transform.LookAt(tpvLookTarget);
+                    ThirdPersonCameraGO.transform.position = CameraTablet.transform.position;
+                    ThirdPersonCameraGO.transform.LookAt(tpvLookTarget);
+
                     if (InputManager.instance.TeleportCamera)
                     {
                         CameraTablet.transform.position = Player.Instance.headCollider.transform.position + Player.Instance.headCollider.transform.forward;
                         foreach (MeshRenderer mr in meshRenderers)
-                        {
                             mr.enabled = true;
-                        }
+                        if (MainPage != null && !MainPage.activeSelf) MainPage.SetActive(true);
                         CameraTablet.transform.parent = null;
+                        if (FakeCameraGO != null) FakeCameraGO.SetActive(true);
                         tpv = false;
                     }
                 }
 
                 // ── Cam-dis lens tracking ────────────────────────────────────────────────
-                // Runs unconditionally at the end of the frame so it applies in every mode
-                // (normal summon, lock-summon, FPV) and always wins over any CameraTablet
-                // child-drag that happened earlier this frame.
-                if (camDisconnect)
+                // Skip when TPV is active — TPV already positioned the cameras and we
+                // don't want cam-dis to pull them back to the head position.
+                if (camDisconnect && !tpv)
                 {
-                    // Apply Y/Z offset in both FPV and non-FPV cam-dis modes so the offset
-                    // sliders always affect the live cam-dis view.
                     var camBase = fpv
                         ? FirstPersonCameraGO.transform.position
                         : CameraFollower.transform.position;
@@ -551,23 +830,24 @@ namespace YizziCamModV2
                         TabletCameraGO.transform.position = camTarget;
                         ThirdPersonCameraGO.transform.position = camTarget;
                     }
-                    if (fpvRawRotation)
+                    Quaternion camDisRot = fpvRawRotation
+                        ? CameraFollower.transform.rotation
+                        : Quaternion.Lerp(TabletCameraGO.transform.rotation, CameraFollower.transform.rotation, smoothing);
+                    if (fpvRollLock)
                     {
-                        TabletCameraGO.transform.rotation = CameraFollower.transform.rotation;
-                        ThirdPersonCameraGO.transform.rotation = CameraFollower.transform.rotation;
+                        var fwd = camDisRot * Vector3.forward;
+                        if (fwd.sqrMagnitude > 0.001f)
+                            camDisRot = Quaternion.LookRotation(fwd, Vector3.up);
                     }
-                    else
-                    {
-                        TabletCameraGO.transform.rotation = Quaternion.Lerp(TabletCameraGO.transform.rotation, CameraFollower.transform.rotation, smoothing);
-                        ThirdPersonCameraGO.transform.rotation = Quaternion.Lerp(ThirdPersonCameraGO.transform.rotation, CameraFollower.transform.rotation, smoothing);
-                    }
+                    TabletCameraGO.transform.rotation      = camDisRot;
+                    ThirdPersonCameraGO.transform.rotation = camDisRot;
                 }
 
                 // ── Unified FPV lens override ────────────────────────────────────────────
                 // Must run LAST so it wins over both the camDisconnect block and the
                 // parent-child drag from the FPV block above.  Applies in FPV mode AND
                 // in standalone cam-dis mode (fpv may be false when tablet is detached).
-                if ((fpv || camDisconnect) && !lockSummonActive)
+                if ((fpv || camDisconnect) && !lockSummonActive && !tpv)
                 {
                     var lensBase = fpv
                         ? FirstPersonCameraGO.transform.position
@@ -575,7 +855,13 @@ namespace YizziCamModV2
                     var lensPos = lensBase
                                   + Vector3.up                            * fpvOffsetY
                                   + FirstPersonCameraGO.transform.forward * fpvOffsetZ;
-                    var lensRot = fpv ? CameraTablet.transform.rotation : CameraFollower.transform.rotation;
+                    // When cam-dis is active the camera tracks the player's body/head direction
+                    // (CameraFollower), so roll lock must strip roll from that — not from the
+                    // static floating tablet.  Only fall back to the tablet rotation in pure
+                    // fpv mode with no cam-dis.
+                    var lensRot = (fpv && !camDisconnect)
+                        ? CameraTablet.transform.rotation
+                        : CameraFollower.transform.rotation;
                     // Roll lock: strip any roll so the camera always sits level on the horizon
                     if (fpvRollLock)
                     {
@@ -765,6 +1051,165 @@ namespace YizziCamModV2
             ThirdPersonCameraGO.transform.localRotation = tpCamDefaultLocalRot;
         }
 
+        // Remembers which sub-page was last open so summon can restore it
+        public string LastOpenPage = "";
+
+        /// <summary>Opens the last-used page when the camera is summoned.</summary>
+        public void SummonToLastPage()
+        {
+            SwitchToMainPage();
+            switch (LastOpenPage)
+            {
+                case "extra":
+                    MainPage.SetActive(false);
+                    ExtraPage.SetActive(true);
+                    SyncExtraPageUnpin();
+                    break;
+                case "weathertime":
+                    MainPage.SetActive(false);
+                    WeatherTimePage.SetActive(true);
+                    SyncWeatherPageStatusTexts();
+                    SyncSubPageUnpin("WeatherTimeBtn");
+                    break;
+                case "cameraclip":
+                    MainPage.SetActive(false);
+                    CameraClipPage.SetActive(true);
+                    if (ClipLagStatusText != null) ClipLagStatusText.text = fpvClipping ? "CLIP:ON" : "CLIP:OFF";
+                    if (ClipLagValueText  != null) ClipLagValueText.text  = fpvClipLag.ToString("F2");
+                    SyncSubPageUnpin("CameraClipBtn");
+                    break;
+                case "general":
+                    MainPage.SetActive(false);
+                    GeneralPage.SetActive(true);
+                    SyncGeneralPageStatusTexts();
+                    SyncSubPageUnpin("GeneralBtn");
+                    break;
+                case "wardrobe":
+                    MainPage.SetActive(false);
+                    WardrobePage.SetActive(true);
+                    TabletWardrobe.Instance?.RefreshDisplay();
+                    SyncSubPageUnpin("GridBtn_1_1");
+                    break;
+                case "report":
+                    MainPage.SetActive(false);
+                    ReportPage.SetActive(true);
+                    TabletReport.Instance?.Refresh();
+                    SyncSubPageUnpin("GridBtn_1_2");
+                    break;
+                case "music":
+                    MainPage.SetActive(false);
+                    if (MusicPage != null)
+                    {
+                        MusicPage.SetActive(true);
+                        RefreshMediaInfo();
+                        SyncSubPageUnpin("MusicBtn");
+                    }
+                    break;
+                case "nametags":
+                    MainPage.SetActive(false);
+                    if (NameTagsPage != null)
+                    {
+                        NameTagsPage.SetActive(true);
+                        SyncNameTagsPageTexts();
+                        SyncSubPageUnpin("NameTagBtn");
+                    }
+                    break;
+                case "misc":
+                    MainPage.SetActive(false);
+                    MiscPage.SetActive(true);
+                    MiscReturnToExtraInsteadOfMain = true;
+                    break;
+            }
+        }
+
+        // ── Called every frame when lock-summon is active ─────────────────────
+        // Swipe your hand through the camera model at speed >= 2 m/s to throw it.
+        const float kThrowDuration = 1.8f;
+        const float kShrinkStart   = 1.4f;
+
+        void UpdateCamThrow()
+        {
+            if (FakeCameraGO == null || CameraTablet == null) return;
+
+            var gt      = GorillaTagger.Instance;
+            var rightTf = gt?.rightHandTransform;
+            var leftTf  = gt?.leftHandTransform;
+
+            // Track hand positions every frame for velocity estimation
+            Vector3 rPos = rightTf != null ? rightTf.position : _prevRightHandPos;
+            Vector3 lPos = leftTf  != null ? leftTf.position  : _prevLeftHandPos;
+            if (!_camHandPosReady)
+            {
+                _camHandPosReady  = true;
+                _prevRightHandPos = rPos;
+                _prevLeftHandPos  = lPos;
+                return;
+            }
+            float dt = Mathf.Max(Time.deltaTime, 0.001f);
+            Vector3 rVel = (rPos - _prevRightHandPos) / dt;
+            Vector3 lVel = (lPos - _prevLeftHandPos)  / dt;
+            _prevRightHandPos = rPos;
+            _prevLeftHandPos  = lPos;
+
+            // ── In-flight: whole tablet tumbles through the air ───────────────
+            if (_camThrowing)
+            {
+                _camThrowTimer += Time.deltaTime;
+
+                _camThrowVel += Physics.gravity * Time.deltaTime;
+                CameraTablet.transform.position += _camThrowVel * Time.deltaTime;
+                CameraTablet.transform.Rotate(_camThrowAngVel * Time.deltaTime, Space.World);
+
+                // Full size during flight — only shrink in the last 0.4 s
+                if (_camThrowTimer >= kShrinkStart)
+                {
+                    float pct = (_camThrowTimer - kShrinkStart) / (kThrowDuration - kShrinkStart);
+                    CameraTablet.transform.localScale = Vector3.Lerp(_camTabletBaseScale, Vector3.zero, pct);
+                }
+
+                if (_camThrowTimer >= kThrowDuration)
+                {
+                    // Restore tablet to clean state, then dismiss
+                    CameraTablet.transform.localScale    = _camTabletBaseScale;
+                    CameraTablet.transform.localRotation = Quaternion.identity;
+                    FakeCameraGO.transform.localPosition = new Vector3(0f, 0.55f, 0.1f);
+                    FakeCameraGO.transform.localRotation = _fakeCamBaseRot;
+                    FakeCameraGO.transform.localScale    = _fakeCamBaseScale;
+                    _camThrowing     = false;
+                    lockSummonActive = false;
+                    fp = false; tpv = false; fpv = true;
+                    ResetTabletCamera();
+                    SwitchToMainPage();
+                    HideRigForFPV();
+                }
+                return;
+            }
+
+            if (!FakeCameraGO.activeSelf) return;
+
+            // ── Velocity trigger: swipe hand through the camera model ─────────
+            const float kThrowSpeed = 2.0f;
+            const float kRadius     = 0.35f;
+
+            Vector3 hitPos = FakeCameraGO.transform.position;
+            bool rHit = rightTf != null && rVel.magnitude >= kThrowSpeed
+                        && Vector3.Distance(rPos, hitPos) < kRadius;
+            bool lHit = leftTf  != null && lVel.magnitude >= kThrowSpeed
+                        && Vector3.Distance(lPos, hitPos) < kRadius;
+
+            if (rHit || lHit)
+            {
+                var rng = new System.Random();
+                _camThrowAngVel = new Vector3(
+                    (float)(rng.NextDouble() * 400 + 200) * (rng.Next(2) == 0 ? 1f : -1f),
+                    (float)(rng.NextDouble() * 300 + 100) * (rng.Next(2) == 0 ? 1f : -1f),
+                    (float)(rng.NextDouble() * 250 + 150) * (rng.Next(2) == 0 ? 1f : -1f));
+                _camThrowing   = true;
+                _camThrowTimer = 0f;
+                _camThrowVel   = rHit ? rVel : lVel;
+            }
+        }
+
         public void SwitchToMainPage()
         {
             MiscReturnToExtraInsteadOfMain = false;
@@ -774,6 +1219,7 @@ namespace YizziCamModV2
             if (WeatherTimePage.activeSelf) WeatherTimePage.SetActive(false);
             if (CameraClipPage.activeSelf) CameraClipPage.SetActive(false);
             if (GeneralPage.activeSelf) GeneralPage.SetActive(false);
+            if (ThemesPage != null && ThemesPage.activeSelf) ThemesPage.SetActive(false);
             if (MusicPage != null && MusicPage.activeSelf) MusicPage.SetActive(false);
             if (NameTagsPage != null && NameTagsPage.activeSelf) NameTagsPage.SetActive(false);
             if (PinSelectorPage != null && PinSelectorPage.activeSelf) PinSelectorPage.SetActive(false);
@@ -952,6 +1398,7 @@ namespace YizziCamModV2
             if (WeatherTimePage.activeSelf) WeatherTimePage.SetActive(false);
             if (CameraClipPage.activeSelf) CameraClipPage.SetActive(false);
             if (GeneralPage.activeSelf) GeneralPage.SetActive(false);
+            if (ThemesPage != null && ThemesPage.activeSelf) ThemesPage.SetActive(false);
             if (MusicPage != null && MusicPage.activeSelf) MusicPage.SetActive(false);
             if (NameTagsPage != null && NameTagsPage.activeSelf) NameTagsPage.SetActive(false);
             if (ReportPage != null && ReportPage.activeSelf) ReportPage.SetActive(false);
@@ -1027,8 +1474,9 @@ namespace YizziCamModV2
                 case "LobbyHopBtn": return "LOBBY\nHOP";
                 case "GridBtn_1_1": return "WARD\nROBE";
                 case "GridBtn_1_2": return "REPO\nRT";
-                case "MusicBtn":       return "MUSIC\nCTRL";
-                case "ExtraMiscBtn":  return "MISC";
+                case "MusicBtn":    return "MUSIC\nCTRL";
+                case "ExtraMiscBtn": return "MISC";
+                case "NameTagBtn":  return "NAME\nTAGS";
                 default: return "EXTRA\nOPTS";
             }
         }
@@ -1375,28 +1823,50 @@ namespace YizziCamModV2
 
             AddPageTitle(page, backTemplate, "EXTRA OPTIONS");
 
+            // Scale all unpin buttons down uniformly — position stays at each page's default
+            void PlaceUnpin(GameObject pg)
+            {
+                var u = pg.transform.Find("UnpinButton");
+                if (u == null) return;
+                u.localScale = u.localScale * 0.7f;
+            }
+
             WeatherTimePage = CreateSubPage(backTemplate, "WeatherTimePage", "WTBackButton", "WEATHER & TIME");
             PopulateWeatherTimePage(WeatherTimePage, backTemplate);
 
             CameraClipPage = CreateSubPage(backTemplate, "CameraClipPage", "CCBackButton", "CAMERA SETTINGS");
             PopulateCameraClipPage(CameraClipPage, backTemplate);
+            PlaceUnpin(CameraClipPage);
+            var ccUnpin = CameraClipPage.transform.Find("UnpinButton");
+            if (ccUnpin != null)
+                ccUnpin.localPosition = backTemplate.transform.localPosition + new Vector3(0f, -0.01f, -1.42f);
 
             GeneralPage = CreateSubPage(backTemplate, "GeneralPage", "GenBackButton", "GENERAL");
             PopulateGeneralPage(GeneralPage, backTemplate);
 
+            ThemesPage = CreateSubPage(backTemplate, "ThemesPage", "ThemesBackButton", "THEMES");
+            PopulateThemesPage(ThemesPage, backTemplate);
+
+            ProfilePage = CreateSubPage(backTemplate, "ProfilePage", "ProfBackButton", "PROFILES");
+            PopulateProfilePage(ProfilePage, backTemplate);
+            PlaceUnpin(ProfilePage);
+            var profBackTf = ProfilePage.transform.Find("ProfBackButton");
+            if (profBackTf != null)
+            {
+                profBackTf.localScale    *= 0.65f;
+                profBackTf.localPosition += new Vector3(0f, -0.04f, 0.03f);
+            }
+
             WardrobePage = CreateSubPage(backTemplate, "WardrobePage", "WBBackButton", "WARDROBE");
             foreach (Transform ch in WardrobePage.transform)
             {
-                if (ch.name != "PageTitleCanvas")
-                    continue;
+                if (ch.name != "PageTitleCanvas") continue;
                 Destroy(ch.gameObject);
                 break;
             }
-
             var wbUnpin = WardrobePage.transform.Find("UnpinButton");
             if (wbUnpin != null)
                 wbUnpin.localPosition = backTemplate.transform.localPosition + new Vector3(0f, 0.70f, 0f);
-
             PopulateWardrobePage(WardrobePage, backTemplate);
 
             MusicPage = CreateSubPage(backTemplate, "MusicPage", "MusicBackButton", "MUSIC CONTROLS");
@@ -1409,17 +1879,14 @@ namespace YizziCamModV2
             var rpBack = ReportPage.transform.Find("RPBackButton");
             if (rpBack != null)
             {
-                rpBack.localScale = rpBack.localScale * 0.7f;
+                rpBack.localScale    = rpBack.localScale * 0.7f;
                 rpBack.localPosition += new Vector3(0f, -0.04f, 0.05f);
             }
+            PlaceUnpin(ReportPage);
+            // Align unpin to the same height as the back button, flush to the right corner
             var rpUnpin = ReportPage.transform.Find("UnpinButton");
             if (rpUnpin != null)
-            {
-                rpUnpin.localScale    = rpUnpin.localScale * 0.7f;
-                // Bottom-right corner — same row as back button, near the right edge
-                rpUnpin.localPosition = backTemplate.transform.localPosition
-                    + new Vector3(0f, 0.03f, -1.20f);
-            }
+                rpUnpin.localPosition = backTemplate.transform.localPosition + new Vector3(0f, -0.01f, -1.42f);
             var rpComp = ReportPage.GetComponent<TabletReport>();
             if (rpComp == null) rpComp = ReportPage.AddComponent<TabletReport>();
             rpComp.Init(ReportPage.transform, backTemplate);
@@ -1632,11 +2099,11 @@ namespace YizziCamModV2
             Destroy(vDiv.GetComponent<Collider>());
 
             // ── Right section: steppers ───────────────────────────────────────────
-            MakeStepper("NTDistMinusBtn",  "NTDistPlusBtn",  0.48f,
+            MakeStepper("NTDistMinusBtn",  "NTDistPlusBtn",  0.60f,
                 ref NTDistValueText,
                 ntm != null ? $"DIST: {ntm.ntMaxDist:F0}m" : "DIST: 20m");
 
-            MakeStepper("NTFloatMinusBtn", "NTFloatPlusBtn", 0.22f,
+            MakeStepper("NTFloatMinusBtn", "NTFloatPlusBtn", 0.34f,
                 ref NTFloatValueText,
                 ntm != null ? $"HEIGHT: {ntm.ntFloatHeight:F2}m" : "HEIGHT: 0.42m");
         }
@@ -1736,14 +2203,14 @@ namespace YizziCamModV2
             // Row 2 (2 buttons): CAM DIS · LOCK SUMMON  (centred)
             var bp = btnTemplate.transform.localPosition;
 
-            const float rowTopBtn    =  0.58f;   // button Y, top row
-            const float rowTopStatus =  0.42f;   // status label Y, top row
-            const float divider1Y    =  0.30f;   // horizontal divider
-            const float rowBotBtn    =  0.18f;   // button Y, bottom row
-            const float rowBotStatus =  0.02f;   // status label Y, bottom row
+            const float rowTopBtn    =  0.58f;   // button Y, top row (4 buttons)
+            const float rowTopStatus =  0.44f;   // status label Y, top row
+            const float divider1Y    =  0.33f;   // horizontal divider
+            const float rowBotBtn    =  0.20f;   // button Y, bottom row (3 buttons)
+            const float rowBotStatus =  0.06f;   // status label Y, bottom row
 
-            // Both rows: 3 columns centred on the page (-0.28 / -0.65 / -1.02)
-            float[] topZ = { -0.28f, -0.65f, -1.02f };
+            // Top row: 4 columns  |  Bottom row: 3 columns
+            float[] topZ = { -0.18f, -0.54f, -0.90f, -1.26f };
             float[] botZ = { -0.28f, -0.65f, -1.02f };
 
             // ── Horizontal divider ────────────────────────────────────────────────────
@@ -1772,7 +2239,7 @@ namespace YizziCamModV2
                 canvas.text = statusText;
             }
 
-            // ── Row 1 ─────────────────────────────────────────────────────────────────
+            // ── Row 1 (4 buttons) ─────────────────────────────────────────────────────
             var uiComp = GetComponent<UI>();
             MakeGenBtn("GenWatermarkBtn", "WATER\nMARK",
                 rowTopBtn, rowTopStatus, topZ[0],
@@ -1794,6 +2261,18 @@ namespace YizziCamModV2
                 ref GenRawRotText,
                 fpvRawRotation ? "RAW:ON" : "RAW:OFF");
 
+            // THEMES — 4th button on row 1
+            {
+                var themesBtn = Instantiate(btnTemplate, page.transform);
+                themesBtn.name = "ThemesBtn";
+                themesBtn.transform.localPosition = bp + new Vector3(0f, rowTopBtn, topZ[3]);
+                AddButtonLabel(themesBtn, "THEMES");
+                Buttons.Add(themesBtn);
+                themesBtn.AddComponent<YzGButton>();
+                var soonCanvas = CreateStatusCanvas(page, btnTemplate, new Vector3(-0.02f, rowTopStatus, topZ[3]));
+                soonCanvas.text = ">";
+            }
+
             // ── Row 2 ─────────────────────────────────────────────────────────────────
             MakeGenBtn("GenCamDisBtn", "CAM\nDIS.",
                 rowBotBtn, rowBotStatus, botZ[0],
@@ -1805,20 +2284,19 @@ namespace YizziCamModV2
                 ref GenLockSummonText,
                 lockSummon ? "LOCK:ON" : "LOCK:OFF");
 
-            // PROFILE placeholder — future camera-profile feature
+            // PROFILE button — opens the Profiles sub-page
             {
                 var profBtn = Instantiate(btnTemplate, page.transform);
                 profBtn.name = "ProfileBtn";
                 profBtn.transform.localPosition = bp + new Vector3(0f, rowBotBtn, botZ[2]);
                 AddButtonLabel(profBtn, "PROFILE");
-                var lbl = profBtn.GetComponentInChildren<Text>(true);
-                if (lbl != null) { lbl.color = new Color(0.55f, 0.55f, 0.55f, 1f); }
                 Buttons.Add(profBtn);
-                profBtn.AddComponent<YzGButton>(); // handler silently ignores "ProfileBtn"
+                profBtn.AddComponent<YzGButton>();
                 var canvas = CreateStatusCanvas(page, btnTemplate, new Vector3(-0.02f, rowBotStatus, botZ[2]));
-                canvas.text = "COMING SOON";
-                canvas.color = new Color(0.55f, 0.55f, 0.55f, 1f);
+                canvas.text = "SLOT: NONE";
+                GenProfileText = canvas;
             }
+
 
         }
 
@@ -1878,6 +2356,23 @@ namespace YizziCamModV2
             t.verticalOverflow = VerticalWrapMode.Overflow;
             if (FovText != null) t.font = FovText.font;
             return t;
+        }
+
+        void PopulateThemesPage(GameObject page, GameObject btnTemplate)
+        {
+            var bp = btnTemplate.transform.localPosition;
+
+            // ── Green texture toggle ──────────────────────────────────────────────────
+            var btn = Instantiate(btnTemplate, page.transform);
+            btn.name = "ThemeTabletBodyBtn";
+            btn.transform.localPosition = bp + new Vector3(0f, 0.42f, -0.54f);
+            AddButtonLabel(btn, "GREEN\nTEXTURE");
+            Buttons.Add(btn);
+            btn.AddComponent<YzGButton>();
+
+            var canvas = CreateStatusCanvas(page, btnTemplate, new Vector3(-0.02f, 0.28f, -0.54f));
+            canvas.text = _customAtlasActive ? "TEXTURE:ON" : "TEXTURE:OFF";
+            ThemeTabletText = canvas;
         }
 
         void PopulateWeatherTimePage(GameObject page, GameObject btnTemplate)
@@ -1961,6 +2456,58 @@ namespace YizziCamModV2
             if (FovText != null) WTTimeStatusText.font = FovText.font;
         }
 
+        void PopulateProfilePage(GameObject page, GameObject btnTemplate)
+        {
+            // ── Layout ────────────────────────────────────────────────────────────
+            // 4 slots, each on its own row:
+            //   [SAVE]   SLOT N: EMPTY/SAVED   [LOAD]   [DEL]
+            // Rows from top: Y=0.58, 0.44, 0.30, 0.16
+            // Columns: SAVE Z=-0.18, label Z=-0.60, LOAD Z=-0.96, DEL Z=-1.24
+            EnsureProfilesFolder();
+
+            float[] rowY = { 0.64f, 0.44f, 0.24f, 0.04f };
+            var bp = btnTemplate.transform.localPosition;
+
+            for (int i = 0; i < ProfileSlotCount; i++)
+            {
+                int slot = i; // capture for lambda
+
+                // SAVE button
+                var saveBtn = Instantiate(btnTemplate, page.transform);
+                saveBtn.name = $"ProfSaveBtn{slot}";
+                saveBtn.transform.localPosition = bp + new Vector3(0f, rowY[i], -0.18f);
+                AddButtonLabel(saveBtn, "SAVE");
+                Buttons.Add(saveBtn);
+                saveBtn.AddComponent<YzGButton>();
+
+                // Slot status label
+                bool exists = System.IO.File.Exists(ProfilePath(slot));
+                var lbl = CreateStatusCanvas(page, btnTemplate, new Vector3(-0.02f, rowY[i], -0.60f));
+                lbl.text  = exists ? $"SLOT {slot + 1}: SAVED" : $"SLOT {slot + 1}: EMPTY";
+                lbl.color = exists ? new Color(0.4f, 1f, 0.4f) : new Color(0.55f, 0.55f, 0.55f);
+                var lblRT = lbl.GetComponent<RectTransform>();
+                if (lblRT != null) lblRT.sizeDelta = new Vector2(220f, 40f);
+                _profileSlotLabels[slot] = lbl;
+
+                // LOAD button
+                var loadBtn = Instantiate(btnTemplate, page.transform);
+                loadBtn.name = $"ProfLoadBtn{slot}";
+                loadBtn.transform.localPosition = bp + new Vector3(0f, rowY[i], -0.96f);
+                AddButtonLabel(loadBtn, "LOAD");
+                Buttons.Add(loadBtn);
+                loadBtn.AddComponent<YzGButton>();
+
+                // DEL button
+                var delBtn = Instantiate(btnTemplate, page.transform);
+                delBtn.name = $"ProfDelBtn{slot}";
+                delBtn.transform.localPosition = bp + new Vector3(0f, rowY[i], -1.24f);
+                AddButtonLabel(delBtn, "DEL");
+                Buttons.Add(delBtn);
+                delBtn.AddComponent<YzGButton>();
+            }
+
+        }
+
         void PopulateCameraClipPage(GameObject page, GameObject btnTemplate)
         {
             // ─────────────────────────────────────────────────────────────────────────
@@ -1997,23 +2544,23 @@ namespace YizziCamModV2
             // Row 3/4 (full width):               Z=-0.26, -0.78, -1.30
             // Divider midpoint: Z=-0.78
 
-            // ── Row 1 LEFT (Y=0.55): Clip-lag toggle + status ────────────────────────
+            // ── Row 1 LEFT (Y=0.58): Clip-lag toggle + status ────────────────────────
             var toggleBtn = Instantiate(btnTemplate, page.transform);
             toggleBtn.name = "CCToggleBtn";
-            toggleBtn.transform.localPosition = bp + new Vector3(0f, 0.55f, -0.24f);
+            toggleBtn.transform.localPosition = bp + new Vector3(0f, 0.58f, -0.24f);
             AddButtonLabel(toggleBtn, fpvClipping ? "ON" : "OFF");
             Buttons.Add(toggleBtn);
             toggleBtn.AddComponent<YzGButton>();
 
             var clipStatusField = ClipLagStatusText;
-            MakeCamStatus("ClipStatusCanvas", 0.55f, -0.52f,
+            MakeCamStatus("ClipStatusCanvas", 0.58f, -0.52f,
                 fpvClipping ? "CLIP:ON" : "CLIP:OFF", ref clipStatusField);
             ClipLagStatusText = clipStatusField;
 
-            // ── Row 2 LEFT (Y=0.42): Clip-lag stepper ────────────────────────────────
+            // ── Row 2 LEFT (Y=0.45): Clip-lag stepper ────────────────────────────────
             var ccMinus = Instantiate(btnTemplate, page.transform);
             ccMinus.name = "CCMinusBtn";
-            ccMinus.transform.localPosition = bp + new Vector3(0f, 0.42f, -0.24f);
+            ccMinus.transform.localPosition = bp + new Vector3(0f, 0.45f, -0.24f);
             AddButtonLabel(ccMinus, "-");
             var ccML = ccMinus.GetComponentInChildren<Text>(true);
             if (ccML != null) { ccML.fontSize = 50; ccML.resizeTextForBestFit = false; }
@@ -2022,7 +2569,7 @@ namespace YizziCamModV2
 
             var ccPlus = Instantiate(btnTemplate, page.transform);
             ccPlus.name = "CCPlusBtn";
-            ccPlus.transform.localPosition = bp + new Vector3(0f, 0.42f, -0.68f);
+            ccPlus.transform.localPosition = bp + new Vector3(0f, 0.45f, -0.68f);
             AddButtonLabel(ccPlus, "+");
             var ccPL = ccPlus.GetComponentInChildren<Text>(true);
             if (ccPL != null) { ccPL.fontSize = 50; ccPL.resizeTextForBestFit = false; }
@@ -2030,56 +2577,56 @@ namespace YizziCamModV2
             ccPlus.AddComponent<YzGButton>();
 
             var clipValField = ClipLagValueText;
-            MakeCamStatus("ClipValueCanvas", 0.42f, -0.46f,
+            MakeCamStatus("ClipValueCanvas", 0.45f, -0.46f,
                 fpvClipLag.ToString("F2"), ref clipValField);
             ClipLagValueText = clipValField;
 
-            // ── Row 1 RIGHT (Y=0.55): FP Z stepper ───────────────────────────────────
+            // ── Row 1 RIGHT (Y=0.58): FP Z stepper ───────────────────────────────────
             var fpzMinus = Instantiate(btnTemplate, page.transform);
             fpzMinus.name = "GenFpZMinusBtn";
-            fpzMinus.transform.localPosition = bp + new Vector3(0f, 0.55f, -0.88f);
+            fpzMinus.transform.localPosition = bp + new Vector3(0f, 0.58f, -0.96f);
             AddButtonLabel(fpzMinus, "-");
             var fpzML = fpzMinus.GetComponentInChildren<Text>(true);
             if (fpzML != null) { fpzML.fontSize = 50; fpzML.resizeTextForBestFit = false; }
             Buttons.Add(fpzMinus); fpzMinus.AddComponent<YzGButton>();
 
-            GenFpZValueText = CreateStatusCanvas(page, btnTemplate, new Vector3(-0.02f, 0.55f, -1.10f));
+            GenFpZValueText = CreateStatusCanvas(page, btnTemplate, new Vector3(-0.02f, 0.58f, -1.16f));
             GenFpZValueText.transform.parent.GetComponent<RectTransform>().sizeDelta = new Vector2(110f, 40f);
             GenFpZValueText.text = $"Z:{fpvOffsetZ:F2}";
 
             var fpzPlus = Instantiate(btnTemplate, page.transform);
             fpzPlus.name = "GenFpZPlusBtn";
-            fpzPlus.transform.localPosition = bp + new Vector3(0f, 0.55f, -1.32f);
+            fpzPlus.transform.localPosition = bp + new Vector3(0f, 0.58f, -1.36f);
             AddButtonLabel(fpzPlus, "+");
             var fpzPL = fpzPlus.GetComponentInChildren<Text>(true);
             if (fpzPL != null) { fpzPL.fontSize = 50; fpzPL.resizeTextForBestFit = false; }
             Buttons.Add(fpzPlus); fpzPlus.AddComponent<YzGButton>();
 
-            // ── Row 2 RIGHT (Y=0.42): FP Y stepper ───────────────────────────────────
+            // ── Row 2 RIGHT (Y=0.45): FP Y stepper ───────────────────────────────────
             var fpyMinus = Instantiate(btnTemplate, page.transform);
             fpyMinus.name = "GenFpYMinusBtn";
-            fpyMinus.transform.localPosition = bp + new Vector3(0f, 0.42f, -0.88f);
+            fpyMinus.transform.localPosition = bp + new Vector3(0f, 0.45f, -0.96f);
             AddButtonLabel(fpyMinus, "-");
             var fpyML = fpyMinus.GetComponentInChildren<Text>(true);
             if (fpyML != null) { fpyML.fontSize = 50; fpyML.resizeTextForBestFit = false; }
             Buttons.Add(fpyMinus); fpyMinus.AddComponent<YzGButton>();
 
-            GenFpYValueText = CreateStatusCanvas(page, btnTemplate, new Vector3(-0.02f, 0.42f, -1.10f));
+            GenFpYValueText = CreateStatusCanvas(page, btnTemplate, new Vector3(-0.02f, 0.45f, -1.16f));
             GenFpYValueText.transform.parent.GetComponent<RectTransform>().sizeDelta = new Vector2(110f, 40f);
             GenFpYValueText.text = $"Y:{fpvOffsetY:F2}";
 
             var fpyPlus = Instantiate(btnTemplate, page.transform);
             fpyPlus.name = "GenFpYPlusBtn";
-            fpyPlus.transform.localPosition = bp + new Vector3(0f, 0.42f, -1.32f);
+            fpyPlus.transform.localPosition = bp + new Vector3(0f, 0.45f, -1.36f);
             AddButtonLabel(fpyPlus, "+");
             var fpyPL = fpyPlus.GetComponentInChildren<Text>(true);
             if (fpyPL != null) { fpyPL.fontSize = 50; fpyPL.resizeTextForBestFit = false; }
             Buttons.Add(fpyPlus); fpyPlus.AddComponent<YzGButton>();
 
-            // thin vertical divider between the two halves (midpoint of left/right split)
+            // thin vertical divider between the two halves
             var vDiv = GameObject.CreatePrimitive(PrimitiveType.Cube);
             vDiv.transform.SetParent(page.transform, false);
-            vDiv.transform.localPosition = bp + new Vector3(0f, 0.485f, -0.78f);
+            vDiv.transform.localPosition = bp + new Vector3(0f, 0.515f, -0.82f);
             vDiv.transform.localScale = new Vector3(0.01f, 0.18f, 0.01f);
             vDiv.GetComponent<MeshRenderer>().material.color = TabletLabelYellow;
             Destroy(vDiv.GetComponent<Collider>());
@@ -2092,41 +2639,41 @@ namespace YizziCamModV2
             div1.GetComponent<MeshRenderer>().material.color = TabletLabelYellow;
             Destroy(div1.GetComponent<Collider>());
 
-            // ── Row 3 (Y=0.19): HIDE HEAD | ROLL LOCK | HIDE COSM — full width ───────
+            // ── Row 3 (Y=0.19): HIDE HEAD | ROLL LOCK | HIDE COSM — left 2/3 only ─────
+            // Buttons compressed to Z=-0.22 … -0.92 so the display fits in right third
             var hhBtn = Instantiate(btnTemplate, page.transform);
             hhBtn.name = "CamHideHeadBtn";
-            hhBtn.transform.localPosition = bp + new Vector3(0f, 0.19f, -0.26f);
+            hhBtn.transform.localPosition = bp + new Vector3(0f, 0.19f, -0.22f);
             AddButtonLabel(hhBtn, "HIDE\nHEAD");
             Buttons.Add(hhBtn);
             hhBtn.AddComponent<YzGButton>();
 
             var rlBtn = Instantiate(btnTemplate, page.transform);
             rlBtn.name = "GenRollLockBtn";
-            rlBtn.transform.localPosition = bp + new Vector3(0f, 0.19f, -0.78f);
+            rlBtn.transform.localPosition = bp + new Vector3(0f, 0.19f, -0.57f);
             AddButtonLabel(rlBtn, "ROLL\nLOCK");
             Buttons.Add(rlBtn);
             rlBtn.AddComponent<YzGButton>();
 
             var hfBtn = Instantiate(btnTemplate, page.transform);
             hfBtn.name = "CamHideFaceCosBtn";
-            hfBtn.transform.localPosition = bp + new Vector3(0f, 0.19f, -1.30f);
+            hfBtn.transform.localPosition = bp + new Vector3(0f, 0.19f, -0.92f);
             AddButtonLabel(hfBtn, "HIDE\nCOSM");
             Buttons.Add(hfBtn);
             hfBtn.AddComponent<YzGButton>();
 
-            // ── Row 4 (Y=0.07): Status labels ────────────────────────────────────────
-            MakeCamStatus("HideHeadStatusCanvas", 0.07f, -0.26f,
+            // ── Row 4 (Y=0.03): Status labels (same Z as buttons above) ──────────────
+            MakeCamStatus("HideHeadStatusCanvas", 0.03f, -0.22f,
                 fpvHideHead ? "HEAD:ON" : "HEAD:OFF", ref CamHideHeadText);
             Text rollLockStatusRef = null;
-            MakeCamStatus("RollLockStatusCanvas", 0.07f, -0.78f,
+            MakeCamStatus("RollLockStatusCanvas", 0.03f, -0.57f,
                 fpvRollLock ? "ROLL:ON" : "ROLL:OFF", ref rollLockStatusRef);
             GenRollLockText = rollLockStatusRef;
-            MakeCamStatus("HideFaceStatusCanvas", 0.07f, -1.30f,
+            MakeCamStatus("HideFaceStatusCanvas", 0.03f, -0.92f,
                 fpvHideFaceCosmetics ? "COSM:ON" : "COSM:OFF", ref CamHideFaceCosText);
 
-            // ── Mini camera preview — bottom-right corner ─────────────────────────────
-            // scale.x controls Z extent (quad rotated 90° around Y).
-            // 0.32 wide × 0.20 tall; centre at (Y=0.06, Z=-1.22) → right edge Z≈-1.38 (tablet boundary)
+            // ── Mini camera preview — right third, level with row 3/4 ─────────────────
+            // scale.x=0.32 → spans Z=-1.06 to Z=-1.38; scale.y=0.22 → spans Y=0.02 to Y=0.24
             try
             {
                 Material feedMat = (ScreenMats != null && ScreenMats.Count > 0)
@@ -2140,9 +2687,9 @@ namespace YizziCamModV2
                     var mini = GameObject.CreatePrimitive(PrimitiveType.Quad);
                     mini.name = "MiniCamPreview";
                     mini.transform.SetParent(page.transform, false);
-                    mini.transform.localPosition = bp + new Vector3(0f, 0.06f, -1.22f);
+                    mini.transform.localPosition = bp + new Vector3(0f, 0.17f, -1.25f);
                     mini.transform.localRotation = Quaternion.Euler(0f, 90f, 0f);
-                    mini.transform.localScale = new Vector3(0.32f, 0.20f, 0.002f);
+                    mini.transform.localScale = new Vector3(0.32f, 0.22f, 0.002f);
                     mini.GetComponent<MeshRenderer>().material = feedMat;
                     Destroy(mini.GetComponent<Collider>());
                 }
@@ -2579,9 +3126,10 @@ namespace YizziCamModV2
             }
             str.Close();
 
-            Texture2D customAtlas = new Texture2D(2, 2);
-            ImageConversion.LoadImage(customAtlas, data);
+            _customAtlasTex = new Texture2D(2, 2);
+            ImageConversion.LoadImage(_customAtlasTex, data);
 
+            _atlasOriginals.Clear();
             Renderer[] allRenderers = FindObjectsOfType<Renderer>(true);
             foreach (Renderer renderer in allRenderers)
             {
@@ -2592,11 +3140,25 @@ namespace YizziCamModV2
                         Texture tex = mat.mainTexture;
                         if (tex != null && tex.name.ToLower().Contains("atlas"))
                         {
-                            mat.mainTexture = customAtlas;
+                            _atlasOriginals.Add((mat, tex));
+                            mat.mainTexture = _customAtlasTex;
                         }
                     }
                 }
             }
+            _customAtlasActive = true;
+        }
+
+        public void SetAtlasActive(bool active)
+        {
+            _customAtlasActive = active;
+            foreach (var (mat, orig) in _atlasOriginals)
+            {
+                if (mat == null) continue;
+                mat.mainTexture = active ? _customAtlasTex : orig;
+            }
+            if (ThemeTabletText != null)
+                ThemeTabletText.text = active ? "TEXTURE:ON" : "TEXTURE:OFF";
         }
     }
 }

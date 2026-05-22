@@ -16,7 +16,7 @@ namespace YizziCamModV2.Comps
     /// All visibility toggles and the distance threshold are driven from the
     /// Name Tags sub-page in Extra Options.
     /// </summary>
-    public class NameTagManager : MonoBehaviour, IOnEventCallback
+    public class NameTagManager : MonoBehaviour, IOnEventCallback, IInRoomCallbacks
     {
         public static NameTagManager Instance { get; private set; }
 
@@ -121,7 +121,7 @@ namespace YizziCamModV2.Comps
                 if (_circularBufferGetItem == null)
                     _circularBufferGetItem = history.GetType().GetMethod("get_Item",
                         BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                var item = _circularBufferGetItem?.Invoke(history, new object[] { 0 });
+                var item = _circularBufferGetItem?.Invoke(history, _circularBufferArgs);
                 if (item == null) return;
 
                 if (_velocityTimeField == null)
@@ -200,13 +200,24 @@ namespace YizziCamModV2.Comps
             public VRRig      rig;
             public GameObject root;
             // row 1
-            public GameObject platformIconGO;   // image mode
-            public Text       platformText;     // text mode (occupies same left strip)
+            public GameObject platformIconGO;
+            public Text       platformText;
             public Image      platformIcon;
             public Text       nameText;
             // row 2
             public Text       fpsText;
             public Text       pingText;
+            // cached last-rendered values — only write to Text when these change
+            public string     cachedName     = null;
+            public string     cachedPlatform = null;
+            public int        cachedFps      = int.MinValue;
+            public int        cachedPing     = int.MinValue;
+            // layout state — only reflow when settings actually change
+            public bool       layoutDirty    = true;
+            // cached head transform — avoids reflection every frame
+            public Transform  cachedHeadTf   = null;
+            // last SetActive state — only call SetActive when it actually changes
+            public bool       lastVisible    = false;
         }
 
         // Build queue — one new tag per frame to avoid join-spike lag
@@ -216,9 +227,15 @@ namespace YizziCamModV2.Comps
         readonly Dictionary<int, PlayerTag>  _tags          = new Dictionary<int, PlayerTag>();
         readonly Dictionary<int, string>     _platformCache = new Dictionary<int, string>();
 
-        // expensive scan cached until player count changes or 8 s elapses
+        // Reused collections in RefreshData — avoid per-call GC allocations
+        readonly HashSet<int> _presentActors = new HashSet<int>();
+        readonly List<int>    _staleActors   = new List<int>();
+
+        // Reused args array for Photon reflection invoke — avoids per-packet allocation
+        static readonly object[] _circularBufferArgs = new object[] { 0 };
+
+        // scoreboard-line cache — rebuilt rarely (full sync every 60 s, not on every join)
         GorillaPlayerScoreboardLine[] _sbLinesCache;
-        int   _lastKnownPlayerCount = -1;
         float _nextSbRebuild;
         float _nextDataRefresh;
 
@@ -228,6 +245,8 @@ namespace YizziCamModV2.Comps
             Instance = this;
             PhotonNetwork.AddCallbackTarget(this);
             ApplyPingPatch();
+            // Pre-warm the background sprite so the first tag build doesn't spike
+            GetBgSprite();
 
             // If UI already loaded settings before we were ready, apply them now
             var ui = CameraController.Instance?.GetComponent<UI>();
@@ -265,55 +284,128 @@ namespace YizziCamModV2.Comps
             }
 
             // Per-frame: reposition and face every tag, apply distance culling
-            Transform camTf = Camera.main != null ? Camera.main.transform : null;
+            Transform camTf  = Camera.main != null ? Camera.main.transform : null;
             Vector3   camPos = camTf != null ? camTf.position : Vector3.zero;
 
             foreach (var tag in _tags.Values)
             {
                 if (tag.root == null) continue;
-                Transform head = GetHeadTransform(tag.rig);
-                if (head == null) { tag.root.SetActive(false); continue; }
+
+                // Use cached head transform; refresh only when null (lazy, not every frame)
+                if (tag.cachedHeadTf == null)
+                    tag.cachedHeadTf = GetHeadTransform(tag.rig);
+                Transform head = tag.cachedHeadTf;
+
+                if (head == null)
+                {
+                    if (tag.lastVisible) { tag.root.SetActive(false); tag.lastVisible = false; }
+                    continue;
+                }
 
                 float dist    = Vector3.Distance(camPos, head.position);
                 bool  inRange = dist <= ntMaxDist;
-                tag.root.SetActive(inRange);
+
+                // Only call SetActive when the visibility state actually changes
+                if (inRange != tag.lastVisible)
+                {
+                    tag.root.SetActive(inRange);
+                    tag.lastVisible = inRange;
+                }
                 if (!inRange) continue;
 
                 tag.root.transform.position = head.position + Vector3.up * ntFloatHeight;
 
-                // Reliable billboard: make canvas +Z point directly at camera
                 if (camTf != null)
                 {
                     Vector3 toCam = camTf.position - tag.root.transform.position;
                     if (toCam.sqrMagnitude > 0.0001f)
-                        // Canvas text is readable from its local -Z side, so point -Z toward camera
                         tag.root.transform.rotation =
                             Quaternion.LookRotation(-toCam.normalized, Vector3.up);
                 }
             }
 
-            // Data refresh at 1 Hz
+            // Data refresh at 0.5 Hz (every 2 s) — canvas writes are skipped when values unchanged
             if (Time.time < _nextDataRefresh) return;
-            _nextDataRefresh = Time.time + 1f;
+            _nextDataRefresh = Time.time + 2f;
             RefreshData();
         }
 
-        // ── data refresh ─────────────────────────────────────────────────────────
+        // ── Photon room callbacks — event-driven join/leave ───────────────────────
+        public void OnPlayerEnteredRoom(Photon.Realtime.Player newPlayer)
+        {
+            if (!ntEnabled) return;
+            // Delay slightly so the VRRig has time to spawn, then enqueue the tag build
+            StartCoroutine(EnqueueAfterSpawn(newPlayer.ActorNumber));
+        }
+
+        public void OnPlayerLeftRoom(Photon.Realtime.Player otherPlayer)
+        {
+            RemoveTag(otherPlayer.ActorNumber);
+        }
+
+        // Unused IInRoomCallbacks stubs
+        public void OnRoomPropertiesUpdate(ExitGames.Client.Photon.Hashtable props) { }
+        public void OnPlayerPropertiesUpdate(Photon.Realtime.Player target, ExitGames.Client.Photon.Hashtable props) { }
+        public void OnMasterClientSwitched(Photon.Realtime.Player newMaster) { }
+
+        IEnumerator EnqueueAfterSpawn(int actorNumber)
+        {
+            // Wait 0.5 s for the VRRig to spawn, then do a fresh scene scan so the
+            // new player's scoreboard line is in the cache before we try to enqueue.
+            yield return new WaitForSeconds(0.5f);
+            _sbLinesCache  = FindObjectsOfType<GorillaPlayerScoreboardLine>(true);
+            _nextSbRebuild = Time.time + 60f;
+            // Retry up to 5 more times in case the VRRig isn't ready yet
+            for (int i = 0; i < 5; i++)
+            {
+                if (TryEnqueueFromLines(actorNumber)) yield break;
+                yield return new WaitForSeconds(0.4f);
+            }
+        }
+
+        bool TryEnqueueFromLines(int actorNumber)
+        {
+            if (_sbLinesCache == null) return false;
+            foreach (var line in _sbLinesCache)
+            {
+                if (line == null || line.playerActorNumber != actorNumber) continue;
+                var rig = line.playerVRRig;
+                if (rig == null || rig.isOfflineVRRig) return false;
+                if (_tags.ContainsKey(actorNumber)) return true;
+                bool alreadyQueued = false;
+                foreach (var p in _buildQueue)
+                    if (p.actorNumber == actorNumber) { alreadyQueued = true; break; }
+                if (!alreadyQueued)
+                    _buildQueue.Enqueue(new PendingTag(actorNumber, rig));
+                return true;
+            }
+            return false;
+        }
+
+        void RemoveTag(int actorNumber)
+        {
+            if (_tags.TryGetValue(actorNumber, out var tag))
+            {
+                if (tag.root != null) Destroy(tag.root);
+                _platformCache.Remove(actorNumber);
+                _tags.Remove(actorNumber);
+            }
+        }
+
+        // ── data refresh (1 Hz) ───────────────────────────────────────────────────
         void RefreshData()
         {
             if (!PhotonNetwork.InRoom) { ClearAll(); return; }
 
-            // Rebuild scoreboard-line cache only when necessary
-            int count = PhotonNetwork.PlayerList?.Length ?? 0;
-            if (_sbLinesCache == null || count != _lastKnownPlayerCount || Time.time >= _nextSbRebuild)
+            // Rebuild scoreboard-line cache rarely — joins/leaves are handled via callbacks
+            if (_sbLinesCache == null || Time.time >= _nextSbRebuild)
             {
-                _sbLinesCache        = FindObjectsOfType<GorillaPlayerScoreboardLine>(true);
-                _lastKnownPlayerCount = count;
-                _nextSbRebuild       = Time.time + 8f;
+                _sbLinesCache  = FindObjectsOfType<GorillaPlayerScoreboardLine>(true);
+                _nextSbRebuild = Time.time + 60f;
             }
 
             int localActor = PhotonNetwork.LocalPlayer?.ActorNumber ?? -1;
-            var present    = new HashSet<int>();
+            _presentActors.Clear();
 
             foreach (var line in _sbLinesCache)
             {
@@ -322,11 +414,10 @@ namespace YizziCamModV2.Comps
                 if (rig == null || rig.isOfflineVRRig) continue;
                 if (line.playerActorNumber == localActor) continue;
 
-                present.Add(line.playerActorNumber);
+                _presentActors.Add(line.playerActorNumber);
 
                 if (!_tags.TryGetValue(line.playerActorNumber, out var tag))
                 {
-                    // Enqueue — tag will be built one-per-frame to avoid join spike
                     bool alreadyQueued = false;
                     foreach (var p in _buildQueue)
                         if (p.actorNumber == line.playerActorNumber) { alreadyQueued = true; break; }
@@ -334,24 +425,19 @@ namespace YizziCamModV2.Comps
                         _buildQueue.Enqueue(new PendingTag(line.playerActorNumber, rig));
                     continue;
                 }
-                else
-                {
-                    tag.rig = rig;
-                }
 
+                tag.rig = rig;
+                // Invalidate cached head if rig reference changed
+                if (tag.cachedHeadTf != null && (tag.rig == null || tag.rig != rig))
+                    tag.cachedHeadTf = null;
                 ApplyData(tag, line);
             }
 
-            // Prune stale tags
-            var stale = new List<int>();
+            // Prune stale tags (safety net for leaves missed by callbacks)
+            _staleActors.Clear();
             foreach (var kvp in _tags)
-                if (!present.Contains(kvp.Key)) stale.Add(kvp.Key);
-            foreach (var id in stale)
-            {
-                if (_tags[id].root != null) Destroy(_tags[id].root);
-                _platformCache.Remove(id);
-                _tags.Remove(id);
-            }
+                if (!_presentActors.Contains(kvp.Key)) _staleActors.Add(kvp.Key);
+            foreach (var id in _staleActors) RemoveTag(id);
         }
 
         // ── 9-slice rounded background sprite ────────────────────────────────────
@@ -484,7 +570,8 @@ namespace YizziCamModV2.Comps
                 platformIcon   = platformIcon,
                 nameText       = nameText,
                 fpsText        = fpsText,
-                pingText       = pingText
+                pingText       = pingText,
+                cachedHeadTf   = GetHeadTransform(rig)
             };
 
             root.SetActive(ntEnabled);
@@ -494,84 +581,101 @@ namespace YizziCamModV2.Comps
         // ── data application ─────────────────────────────────────────────────────
         void ApplyData(PlayerTag tag, GorillaPlayerScoreboardLine line)
         {
-            // Name
-            if (tag.nameText != null)
-            {
-                var player = FindPhotonPlayer(tag.actorNumber);
-                string name = (player != null && !string.IsNullOrEmpty(player.NickName))
-                    ? player.NickName : "P" + tag.actorNumber;
-                tag.nameText.text    = ntShowName ? name : "";
-                tag.nameText.enabled = ntShowName;
-            }
-
-            // Platform — try cosmetics cache first (TooMuchInfo method), then heuristics
+            // ── Platform (resolve once, cache forever per actor) ──────────────────
             if (!_platformCache.TryGetValue(tag.actorNumber, out string plat))
             {
                 plat = GetCachedPlatform(tag.rig) ?? TabletReport.DetectPlatformPublic(tag.actorNumber);
                 _platformCache[tag.actorNumber] = plat;
             }
 
-            // Platform strip: show icon OR text, never both, never overlapping name
+            // ── Layout reflow — only when dirty (settings changed or first build) ─
             bool showPlat = ntShowPlatform;
-            if (tag.platformIconGO != null)
-                tag.platformIconGO.SetActive(showPlat && ntPlatformAsImg);
-            if (tag.platformText != null)
+            if (tag.layoutDirty)
             {
-                tag.platformText.enabled = showPlat && !ntPlatformAsImg;
-                tag.platformText.text    = showPlat && !ntPlatformAsImg ? plat : "";
-            }
-            if (showPlat && ntPlatformAsImg && tag.platformIcon != null)
-            {
-                string platUpper = plat.ToUpperInvariant();
-                Sprite s = platUpper.Contains("OCULUS") ? OculusPCSprite
-                         : platUpper.Contains("STEAM")  ? SteamSprite
-                         : MetaSprite;
-                tag.platformIcon.sprite  = s;
-                tag.platformIcon.enabled = s != null;
+                tag.layoutDirty = false;
+                ApplyLayout(tag, showPlat);
+
+                if (tag.platformIconGO != null)
+                    tag.platformIconGO.SetActive(showPlat && ntPlatformAsImg);
+                if (tag.platformText != null)
+                    tag.platformText.enabled = showPlat && !ntPlatformAsImg;
+                if (tag.fpsText  != null) tag.fpsText.enabled  = ntShowFps;
+                if (tag.pingText != null) tag.pingText.enabled = ntShowPing;
+                if (tag.nameText != null) tag.nameText.enabled = ntShowName;
             }
 
-            // Reflow layout based on current settings
-            ApplyLayout(tag, showPlat);
-
-            // FPS
-            if (tag.fpsText != null)
+            // ── Name — only write when value changes ──────────────────────────────
+            if (tag.nameText != null && ntShowName)
             {
-                tag.fpsText.enabled = ntShowFps;
-                if (ntShowFps)
+                var player = FindPhotonPlayer(tag.actorNumber);
+                string name = (player != null && !string.IsNullOrEmpty(player.NickName))
+                    ? player.NickName : "P" + tag.actorNumber;
+                if (name != tag.cachedName)
                 {
-                    int fps = -1;
-                    if (_fpsField != null && tag.rig != null)
-                        try { fps = (int)_fpsField.GetValue(tag.rig); } catch { }
+                    tag.nameText.text = name;
+                    tag.cachedName    = name;
+                }
+            }
+
+            // ── Platform text/icon — only write when platform string changes ──────
+            if (plat != tag.cachedPlatform)
+            {
+                tag.cachedPlatform = plat;
+                if (tag.platformText != null && showPlat && !ntPlatformAsImg)
+                    tag.platformText.text = plat;
+                if (showPlat && ntPlatformAsImg && tag.platformIcon != null)
+                {
+                    string pu = plat.ToUpperInvariant();
+                    Sprite s  = pu.Contains("OCULUS") ? OculusPCSprite
+                              : pu.Contains("STEAM")  ? SteamSprite
+                              : MetaSprite;
+                    tag.platformIcon.sprite  = s;
+                    tag.platformIcon.enabled = s != null;
+                }
+            }
+
+            // ── FPS — only write when value changes ───────────────────────────────
+            if (tag.fpsText != null && ntShowFps)
+            {
+                int fps = -1;
+                if (_fpsField != null && tag.rig != null)
+                    try { fps = (int)_fpsField.GetValue(tag.rig); } catch { }
+                if (fps != tag.cachedFps)
+                {
                     tag.fpsText.text = fps >= 0 ? $"FPS: {fps}" : "FPS: ?";
+                    tag.cachedFps    = fps;
                 }
-                // Span full row when ping is hidden, half-row when both are shown
-                var fpsRT = tag.fpsText.GetComponent<RectTransform>();
-                if (fpsRT != null)
-                    fpsRT.anchorMax = new Vector2(ntShowPing ? 0.5f : 1f, fpsRT.anchorMax.y);
             }
 
-            // Ping — velocity-timestamp method from TooMuchInfo (works for all players)
-            if (tag.pingText != null)
+            // ── Ping — only write when value changes ──────────────────────────────
+            if (tag.pingText != null && ntShowPing)
             {
-                tag.pingText.enabled = ntShowPing;
-                if (ntShowPing)
+                int ping = TryGetPingForRig(tag.rig);
+                if (ping != tag.cachedPing)
                 {
-                    int ping = TryGetPingForRig(tag.rig);
                     tag.pingText.text = ping >= 0 ? $"PING: {ping}" : "PING: ?";
+                    tag.cachedPing    = ping;
                 }
-                // Span full row when FPS is hidden
-                var pingRT = tag.pingText.GetComponent<RectTransform>();
-                if (pingRT != null)
-                    pingRT.anchorMin = new Vector2(ntShowFps ? 0.5f : 0f, pingRT.anchorMin.y);
             }
-
         }
 
         // ── public helpers called by buttons ─────────────────────────────────────
         public void RefreshAllTags()
         {
             foreach (var tag in _tags.Values)
-                if (tag.root != null) tag.root.SetActive(ntEnabled);
+            {
+                bool active = ntEnabled;
+                if (tag.root != null && active != tag.lastVisible)
+                {
+                    tag.root.SetActive(active);
+                    tag.lastVisible = active;
+                }
+                tag.layoutDirty    = true;
+                tag.cachedName     = null;
+                tag.cachedPlatform = null;
+                tag.cachedFps      = int.MinValue;
+                tag.cachedPing     = int.MinValue;
+            }
             if (ntEnabled) RefreshData();
         }
 

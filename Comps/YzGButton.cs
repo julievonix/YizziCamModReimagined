@@ -6,35 +6,49 @@ namespace YizziCamModV2.Comps
 {
     class YzGButton : MonoBehaviour
     {
-        // Briefly replaces the button label with "DONE!" then restores it.
-        void FlashDone()
+        // _origLabel: text at the moment Flash() fired (captured fresh each flash).
+        // _isFlashing: true from Flash() until the coroutine completes or OnEnable restores.
+        // OnEnable only restores when _isFlashing is true — so permanent label changes
+        // (e.g. "PIN" → "MUSIC CTRL" via RefreshPinnedShortcutLabel) are never reverted.
+        string _origLabel;
+        bool   _isFlashing;
+
+        void FlashDone()            => Flash("DONE!");
+        void FlashLabel(string msg) => Flash(msg);
+
+        void Flash(string msg)
         {
             var lbl = GetComponentInChildren<Text>(true);
             if (lbl == null) return;
-            string orig = lbl.text;
-            lbl.text = "DONE!";
-            StartCoroutine(RestoreLabel(lbl, orig, 1.4f));
+            _origLabel  = lbl.text;   // capture the current label as the restore target
+            _isFlashing = true;
+            lbl.text    = msg;
+            StartCoroutine(RestoreLabel(lbl, 1.4f));
         }
 
-        void FlashLabel(string msg)
-        {
-            var lbl = GetComponentInChildren<Text>(true);
-            if (lbl == null) return;
-            string orig = lbl.text;
-            lbl.text = msg;
-            StartCoroutine(RestoreLabel(lbl, orig, 1.4f));
-        }
-
-        IEnumerator RestoreLabel(Text lbl, string orig, float delay)
+        IEnumerator RestoreLabel(Text lbl, float delay)
         {
             yield return new WaitForSeconds(delay);
-            if (lbl != null) lbl.text = orig;
+            if (lbl != null) lbl.text = _origLabel ?? lbl.text;
+            _isFlashing = false;
         }
+
         void Start()
         {
             this.gameObject.layer = 18;
         }
-        void OnEnable() { Invoke("ButtonTimer", 0.3f); }
+
+        void OnEnable()
+        {
+            // Only restore if a flash coroutine was killed mid-flight by deactivation
+            if (_isFlashing && _origLabel != null)
+            {
+                var lbl = GetComponentInChildren<Text>(true);
+                if (lbl != null) lbl.text = _origLabel;
+                _isFlashing = false;
+            }
+            Invoke("ButtonTimer", 0.3f);
+        }
         void OnDisable() { CameraController.Instance.canbeused = false; }
         void ButtonTimer()
         {
@@ -90,13 +104,16 @@ namespace YizziCamModV2.Comps
                         CameraController.Instance.MiscPage.SetActive(false);
                         CameraController.Instance.ExtraPage.SetActive(true);
                         CameraController.Instance.SyncExtraPageUnpin();
+                        CameraController.Instance.LastOpenPage = "extra";
                         break;
                     case "ExtraMiscBtn":
                         CameraController.Instance.OpenMiscFromExtraPage();
+                        CameraController.Instance.LastOpenPage = "misc";
                         break;
                     case "ExtraBackButton":
                         CameraController.Instance.ExtraPage.SetActive(false);
                         CameraController.Instance.MainPage.SetActive(true);
+                        CameraController.Instance.LastOpenPage = "";
                         break;
                     // ── Pin Selector Page buttons ─────────────────────────────────────
                     case "PSCancelButton":
@@ -175,11 +192,13 @@ namespace YizziCamModV2.Comps
                         CameraController.Instance.WeatherTimePage.SetActive(true);
                         CameraController.Instance.SyncWeatherPageStatusTexts();
                         CameraController.Instance.SyncSubPageUnpin("WeatherTimeBtn");
+                        CameraController.Instance.LastOpenPage = "weathertime";
                         break;
                     case "WTBackButton":
                         CameraController.Instance.WeatherTimePage.SetActive(false);
                         CameraController.Instance.ExtraPage.SetActive(true);
                         CameraController.Instance.SyncExtraPageUnpin();
+                        CameraController.Instance.LastOpenPage = "extra";
                         break;
                     case "CameraClipBtn":
                         CameraController.Instance.ExtraPage.SetActive(false);
@@ -189,22 +208,53 @@ namespace YizziCamModV2.Comps
                         if (CameraController.Instance.ClipLagValueText != null)
                             CameraController.Instance.ClipLagValueText.text = CameraController.Instance.fpvClipLag.ToString("F2");
                         CameraController.Instance.SyncSubPageUnpin("CameraClipBtn");
+                        CameraController.Instance.LastOpenPage = "cameraclip";
                         break;
                     case "CCBackButton":
                         CameraController.Instance.CameraClipPage.SetActive(false);
                         CameraController.Instance.ExtraPage.SetActive(true);
                         CameraController.Instance.SyncExtraPageUnpin();
+                        CameraController.Instance.LastOpenPage = "extra";
                         break;
                     case "GeneralBtn":
                         CameraController.Instance.ExtraPage.SetActive(false);
                         CameraController.Instance.GeneralPage.SetActive(true);
                         CameraController.Instance.SyncGeneralPageStatusTexts();
                         CameraController.Instance.SyncSubPageUnpin("GeneralBtn");
+                        CameraController.Instance.LastOpenPage = "general";
                         break;
                     case "GenBackButton":
                         CameraController.Instance.GeneralPage.SetActive(false);
                         CameraController.Instance.ExtraPage.SetActive(true);
                         CameraController.Instance.SyncExtraPageUnpin();
+                        CameraController.Instance.LastOpenPage = "extra";
+                        break;
+                    case "ThemesBtn":
+                        CameraController.Instance.GeneralPage.SetActive(false);
+                        CameraController.Instance.ThemesPage.SetActive(true);
+                        CameraController.Instance.SyncSubPageUnpin("GeneralBtn");
+                        CameraController.Instance.LastOpenPage = "general";
+                        break;
+                    case "ThemesBackButton":
+                        CameraController.Instance.ThemesPage.SetActive(false);
+                        CameraController.Instance.GeneralPage.SetActive(true);
+                        CameraController.Instance.SyncGeneralPageStatusTexts();
+                        CameraController.Instance.SyncSubPageUnpin("GeneralBtn");
+                        break;
+                    case "ThemeTabletBodyBtn":
+                        CameraController.Instance.SetAtlasActive(!CameraController.Instance._customAtlasActive);
+                        break;
+                    case "ProfileBtn":
+                        CameraController.Instance.GeneralPage.SetActive(false);
+                        CameraController.Instance.ProfilePage.SetActive(true);
+                        CameraController.Instance.ProfilePage.transform.Find("UnpinButton")?.gameObject.SetActive(false);
+                        CameraController.Instance.LastOpenPage = "general"; // restore to general on summon
+                        break;
+                    case "ProfBackButton":
+                        CameraController.Instance.ProfilePage.SetActive(false);
+                        CameraController.Instance.GeneralPage.SetActive(true);
+                        CameraController.Instance.SyncGeneralPageStatusTexts();
+                        CameraController.Instance.LastOpenPage = "general";
                         break;
                     case "SaveSettsBtn":
                         {
@@ -243,17 +293,20 @@ namespace YizziCamModV2.Comps
                         CameraController.Instance.WardrobePage.SetActive(true);
                         TabletWardrobe.Instance?.RefreshDisplay();
                         CameraController.Instance.SyncSubPageUnpin("GridBtn_1_1");
+                        CameraController.Instance.LastOpenPage = "wardrobe";
                         break;
                     case "WBBackButton":
                         CameraController.Instance.WardrobePage.SetActive(false);
                         CameraController.Instance.ExtraPage.SetActive(true);
                         CameraController.Instance.SyncExtraPageUnpin();
+                        CameraController.Instance.LastOpenPage = "extra";
                         break;
                     case "GridBtn_1_2":
                         CameraController.Instance.ExtraPage.SetActive(false);
                         CameraController.Instance.ReportPage.SetActive(true);
                         TabletReport.Instance?.Refresh();
                         CameraController.Instance.SyncSubPageUnpin("GridBtn_1_2");
+                        CameraController.Instance.LastOpenPage = "report";
                         break;
                     case "RPBackButton":
                         if (TabletReport.Instance != null && TabletReport.Instance.IsInDetail)
@@ -265,6 +318,7 @@ namespace YizziCamModV2.Comps
                             CameraController.Instance.ReportPage.SetActive(false);
                             CameraController.Instance.ExtraPage.SetActive(true);
                             CameraController.Instance.SyncExtraPageUnpin();
+                            CameraController.Instance.LastOpenPage = "extra";
                         }
                         break;
                     case "RPDetailBack":
@@ -278,7 +332,11 @@ namespace YizziCamModV2.Comps
                         {
                             FlashDone();
                             var hsLine = TabletReport.Instance.FindScoreboardLine(TabletReport.Instance.DetailActorNumber);
-                            if (hsLine != null) hsLine.PressButton(true, GorillaPlayerLineButton.ButtonType.HateSpeech);
+                            if (hsLine != null)
+                            {
+                                hsLine.PressButton(true,  GorillaPlayerLineButton.ButtonType.HateSpeech);
+                                hsLine.PressButton(false, GorillaPlayerLineButton.ButtonType.HateSpeech);
+                            }
                         }
                         break;
                     case "RPToxicity":
@@ -286,7 +344,11 @@ namespace YizziCamModV2.Comps
                         {
                             FlashDone();
                             var txLine = TabletReport.Instance.FindScoreboardLine(TabletReport.Instance.DetailActorNumber);
-                            if (txLine != null) txLine.PressButton(true, GorillaPlayerLineButton.ButtonType.Toxicity);
+                            if (txLine != null)
+                            {
+                                txLine.PressButton(true,  GorillaPlayerLineButton.ButtonType.Toxicity);
+                                txLine.PressButton(false, GorillaPlayerLineButton.ButtonType.Toxicity);
+                            }
                         }
                         break;
                     case "RPCheating":
@@ -294,7 +356,11 @@ namespace YizziCamModV2.Comps
                         {
                             FlashDone();
                             var chLine = TabletReport.Instance.FindScoreboardLine(TabletReport.Instance.DetailActorNumber);
-                            if (chLine != null) chLine.PressButton(true, GorillaPlayerLineButton.ButtonType.Cheating);
+                            if (chLine != null)
+                            {
+                                chLine.PressButton(true,  GorillaPlayerLineButton.ButtonType.Cheating);
+                                chLine.PressButton(false, GorillaPlayerLineButton.ButtonType.Cheating);
+                            }
                         }
                         break;
                     case "RPVoiceFocus":
@@ -426,6 +492,20 @@ namespace YizziCamModV2.Comps
                         if (CameraController.Instance.GenFpZValueText != null)
                             CameraController.Instance.GenFpZValueText.text = $"Z:{CameraController.Instance.fpvOffsetZ:F2}";
                         break;
+                    // ── Profile slots (0-3) ───────────────────────────────────────
+                    case "ProfSaveBtn0": CameraController.Instance.SaveProfile(0); FlashDone(); break;
+                    case "ProfSaveBtn1": CameraController.Instance.SaveProfile(1); FlashDone(); break;
+                    case "ProfSaveBtn2": CameraController.Instance.SaveProfile(2); FlashDone(); break;
+                    case "ProfSaveBtn3": CameraController.Instance.SaveProfile(3); FlashDone(); break;
+                    case "ProfLoadBtn0": CameraController.Instance.LoadProfile(0); FlashDone(); break;
+                    case "ProfLoadBtn1": CameraController.Instance.LoadProfile(1); FlashDone(); break;
+                    case "ProfLoadBtn2": CameraController.Instance.LoadProfile(2); FlashDone(); break;
+                    case "ProfLoadBtn3": CameraController.Instance.LoadProfile(3); FlashDone(); break;
+                    case "ProfDelBtn0":  CameraController.Instance.DeleteProfile(0); FlashLabel("DELETED"); break;
+                    case "ProfDelBtn1":  CameraController.Instance.DeleteProfile(1); FlashLabel("DELETED"); break;
+                    case "ProfDelBtn2":  CameraController.Instance.DeleteProfile(2); FlashLabel("DELETED"); break;
+                    case "ProfDelBtn3":  CameraController.Instance.DeleteProfile(3); FlashLabel("DELETED"); break;
+
                     case "CamHideHeadBtn":
                         CameraController.Instance.fpvHideHead = !CameraController.Instance.fpvHideHead;
                         CameraController.Instance.ApplyHideHead(CameraController.Instance.fpvHideHead);
@@ -465,6 +545,7 @@ namespace YizziCamModV2.Comps
                             CameraController.Instance.RefreshMediaInfo();
                         }
                         CameraController.Instance.SyncSubPageUnpin("MusicBtn");
+                        CameraController.Instance.LastOpenPage = "music";
                         break;
                     case "NameTagBtn":
                         CameraController.Instance.ExtraPage.SetActive(false);
@@ -474,6 +555,7 @@ namespace YizziCamModV2.Comps
                             CameraController.Instance.SyncNameTagsPageTexts();
                             CameraController.Instance.SyncSubPageUnpin("NameTagBtn");
                         }
+                        CameraController.Instance.LastOpenPage = "nametags";
                         break;
                     case "PS_NameTagBtn":
                         CameraController.Instance.PinExtraChoice("NameTagBtn");
@@ -486,6 +568,7 @@ namespace YizziCamModV2.Comps
                             CameraController.Instance.NameTagsPage.SetActive(false);
                         CameraController.Instance.ExtraPage.SetActive(true);
                         CameraController.Instance.SyncExtraPageUnpin();
+                        CameraController.Instance.LastOpenPage = "extra";
                         break;
                     // ── Name Tags sub-page toggles ────────────────────────────────────────
                     case "NTMasterBtn":
@@ -549,7 +632,7 @@ namespace YizziCamModV2.Comps
                         {
                             var ntm = NameTagManager.Instance;
                             if (ntm == null) break;
-                            ntm.ntMaxDist = Mathf.Min(50f, ntm.ntMaxDist + 2f);
+                            ntm.ntMaxDist = Mathf.Min(20f, ntm.ntMaxDist + 2f);
                             CameraController.Instance.SyncNameTagsPageTexts();
                         }
                         break;
@@ -576,6 +659,7 @@ namespace YizziCamModV2.Comps
                             CameraController.Instance.MusicPage.SetActive(false);
                         CameraController.Instance.ExtraPage.SetActive(true);
                         CameraController.Instance.SyncExtraPageUnpin();
+                        CameraController.Instance.LastOpenPage = "extra";
                         break;
                     case "MusicPlayPauseBtn":
                         FlashDone();
@@ -661,29 +745,45 @@ namespace YizziCamModV2.Comps
                         CameraController.Instance.canbeused = true;
                         break;
                     case "TPVButton":
-                        if (CameraController.Instance.TPVMode == CameraController.TPVModes.BACK)
+                    {
+                        var cc = CameraController.Instance;
+                        if (cc.TPVMode == CameraController.TPVModes.BACK)
                         {
-                            if (CameraController.Instance.flipped)
+                            if (cc.flipped)
                             {
-                                CameraController.Instance.flipped = false;
-                                CameraController.Instance.ThirdPersonCameraGO.transform.Rotate(0.0f, 180f, 0.0f);
-                                CameraController.Instance.TabletCameraGO.transform.Rotate(0.0f, 180f, 0.0f);
+                                cc.flipped = false;
+                                cc.ThirdPersonCameraGO.transform.Rotate(0.0f, 180f, 0.0f);
+                                cc.TabletCameraGO.transform.Rotate(0.0f, 180f, 0.0f);
                             }
                         }
-                        else if (CameraController.Instance.TPVMode == CameraController.TPVModes.FRONT)
+                        else if (cc.TPVMode == CameraController.TPVModes.FRONT)
                         {
-                            if (!CameraController.Instance.flipped)
+                            if (!cc.flipped)
                             {
-                                CameraController.Instance.flipped = true;
-                                CameraController.Instance.ThirdPersonCameraGO.transform.Rotate(0.0f, 180f, 0.0f);
-                                CameraController.Instance.TabletCameraGO.transform.Rotate(0.0f, 180f, 0.0f);
+                                cc.flipped = true;
+                                cc.ThirdPersonCameraGO.transform.Rotate(0.0f, 180f, 0.0f);
+                                cc.TabletCameraGO.transform.Rotate(0.0f, 180f, 0.0f);
                             }
                         }
-                        CameraController.Instance.lockSummonActive = false;
-                        CameraController.Instance.fp = false;
-                        CameraController.Instance.fpv = false;
-                        CameraController.Instance.tpv = true;
+                        cc.lockSummonActive = false;
+                        cc.fp  = false;
+                        cc.fpv = false;
+                        cc.tpv = true;
+
+                        // Immediately snap the tablet to the TPV target position so the very
+                        // first frame already shows a correct third-person feed.  Without this,
+                        // SmoothDamp takes several frames to move from the FPV head position,
+                        // making the view look like FPV for a noticeable moment.
+                        var pivot = cc.followheadrot
+                            ? cc.CameraFollower.transform
+                            : cc.TPVBodyFollower.transform;
+                        cc.CameraTablet.transform.position = cc.TPVMode == CameraController.TPVModes.BACK
+                            ? pivot.TransformPoint(new Vector3(0f, 0.2f, -1.0f))
+                            : pivot.TransformPoint(new Vector3(0f, 0.2f,  1.0f));
+
+                        cc.ResetTabletCamera();
                         break;
+                    }
                     case "FPVButton":
                         if (CameraController.Instance.flipped)
                         {
@@ -693,7 +793,10 @@ namespace YizziCamModV2.Comps
                         }
                         CameraController.Instance.lockSummonActive = false;
                         CameraController.Instance.fp = false;
+                        CameraController.Instance.tpv = false;
                         CameraController.Instance.fpv = true;
+                        if (CameraController.Instance.FakeCameraGO != null)
+                            CameraController.Instance.FakeCameraGO.SetActive(true);
                         break;
                     case "FlipCamButton":
                         CameraController.Instance.flipped = !CameraController.Instance.flipped;
