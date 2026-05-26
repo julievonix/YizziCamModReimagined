@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>netstandard2.1</TargetFramework>
-    <AssemblyName>YizziCamModV2</AssemblyName>
+    <AssemblyName>YizziCamModReimagend</AssemblyName>
     <RootNamespace>YizziCamModV2</RootNamespace>
     <LangVersion>latest</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -175,12 +175,20 @@
     <MakeDir Directories="$(BepInExPluginsDir)" Condition="Exists('$(GameDir)')" />
     <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(BepInExPluginsDir)\$(TargetFileName)" SkipUnchangedFiles="false" Condition="Exists('$(GameDir)')" />
     <Copy SourceFiles="$(_YizziPdb)" DestinationFolder="$(BepInExPluginsDir)" SkipUnchangedFiles="false" Condition="Exists('$(GameDir)') And Exists('$(_YizziPdb)')" />
-    <Message Importance="high" Text="YizziCamModV2 → $(BepInExPluginsDir)\$(TargetFileName)" Condition="Exists('$(GameDir)')" />
+    <!-- Remove old DLL name if present so BepInEx doesn't load the mod twice -->
+    <Delete Files="$(BepInExPluginsDir)\YizziCamModV2.dll" Condition="Exists('$(BepInExPluginsDir)\YizziCamModV2.dll')" />
+    <Message Importance="high" Text="YizziCamModReimagend → $(BepInExPluginsDir)\$(TargetFileName)" Condition="Exists('$(GameDir)')" />
     <!-- Build and deploy the NowPlayingHelper (song-info query tool) -->
     <Exec Command="C:\Users\Monk\.dotnet\dotnet.exe publish &quot;$(MSBuildThisFileDirectory)NowPlayingHelper\NowPlayingHelper.csproj&quot; -c Release -o &quot;$(_NowPlayingOut)&quot; --nologo -v q"
           Condition="Exists('$(GameDir)')"
           IgnoreExitCode="true" />
     <Message Importance="high" Text="YizziNowPlaying → $(_NowPlayingOut)" Condition="Exists('$(GameDir)')" />
+    <!-- Copy gun model so TabletReport can load it at runtime -->
+    <Copy SourceFiles="C:\Users\Monk\Downloads\8748fcb184740d08360c12c9ba9268fc\8748fcb184740d08360c12c9ba9268fc.obj"
+          DestinationFiles="$(BepInExPluginsDir)\YizziCamGun.obj"
+          Condition="Exists('$(GameDir)') And Exists('C:\Users\Monk\Downloads\8748fcb184740d08360c12c9ba9268fc\8748fcb184740d08360c12c9ba9268fc.obj')" />
+    <Message Importance="high" Text="YizziCamGun.obj → $(BepInExPluginsDir)\YizziCamGun.obj"
+             Condition="Exists('$(GameDir)') And Exists('C:\Users\Monk\Downloads\8748fcb184740d08360c12c9ba9268fc\8748fcb184740d08360c12c9ba9268fc.obj')" />
   </Target>
 
 </Project>

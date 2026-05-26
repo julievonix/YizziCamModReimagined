@@ -1,35 +1,53 @@
-# YizziCamModReimagined 												[![Github All Releases](https://img.shields.io/github/downloads/Yizzii/YizziCamModV2/total.svg)]() 
+# YizziCamModReimagined 												[![Github All Releases](https://img.shields.io/github/downloads/julievonix/YizziCamModReimagined/total.svg)]()
 
-Camera Mod with in game UI!
+Camera Mod with in-game UI!
 
 ![](cammod.gif)
 
 ### *Features:*
 * Monitor UI (tab to open a menu for extra options)
 * Freecam with gamepad support
-* Spectator with ajustable offset (and a toggle to control it with wasd)
-* First Person View with smoothing
-* Third Person View (like gtags default camera just smoother,misc page for settings, front/back and follow head rotation)
-* Follow Player (Camera will look at and follow player, misc page for settings, minimum distance and speed)
-* Grabbable Handles (you can only grab right side with right hand and left side with left hand)
+* Spectator with adjustable offset (and a toggle to control it with WASD)
+* First Person View with smoothing and clipping control
+* Third Person View (front/back, follow head rotation — misc page for settings)
+* Follow Player (camera looks at and follows player, adjustable min distance and speed)
+* **Lock Summon** — locks the camera floating in front of you; press summon again to dismiss. Toggle on the General page.
+* **Throw camera** — while Lock Summon is active, swipe your hand through the camera model at speed to throw it away
+* **Camera Disconnect** — decouples the camera feed from the tablet position so you can hold the tablet anywhere
+* Grab handles (right hand on right handle, left hand on left handle)
+* Adjustable FOV, Near Clip, and Smoothing
+* Camera Clipping Slider (controls how much the camera clips through your rig — original Yizzi look is 0.40)
+* Weather and Time control (Tab Menu)
+* **Player Report page** — view and report players in-session
+* **Wardrobe page** — change cosmetics in-game
+* **Name Tags page** — toggle name tags and customize display
+* **Music / Now Playing page** — shows current song from the YizziNowPlaying helper
+* **General settings page** — Watermark, Raw Rotation, Summon Key label, Camera Disconnect, Lock Summon
 * Green Screen (in city)
-* Adjustable FOV, Nearclip and smoothing
-* Weather and Time control (In Tab Menu)
-* Camera Clipping Slider (controll how much the camera clips through the player rig. Original Yizzi look is 0.40) 
-* Save settings Button (FOV,PV, etc.) (In tab Menu)
+* Save settings button (FOV, TPV, etc.) in Tab Menu
+* Lobby Hop button
 
 
 ### *Controls:*
-* disable first person view by pressing X/Y or F6 on keyboard
-* disable third person view by pressing X/Y or F6 joystick
-* press X/Y or F6 to teleport camera in front of you
-* hold grip/trigger on banana handle to grab camera
-* press tab on IRL keyboard for Menu (extra options)
-* WASD/arrow keys for freecam (also a toggle for gamepad)
- 
-# *Disclamers:*
+* **Summon/Dismiss camera** — press **X/Y** (VR) or **F6** (keyboard)
+* **Toggle Lock Summon on/off** — General page → LOCK SUMMON button
+* **Summon/dismiss with Lock Summon active** — same key (X/Y or F6); camera appears locked in front of you
+* **Throw camera** — while Lock Summon is active, swipe your hand through the floating camera model at speed
+* **Grab camera** — hold grip/trigger on the banana handle (right hand = right handle, left hand = left handle)
+* **First Person View** — FPV button on main page; press X/Y or F6 to exit
+* **Third Person View** — TPV button on main page; press X/Y or F6 to exit
+* **Follow Player mode** — FP button on main page
+* **Camera Disconnect** — CAM DIS button (General page); decouples feed from tablet
+* **Freecam** — WASD / arrow keys on keyboard, or enable gamepad toggle on General page
+* **Open Tab Menu** — press **Tab** on keyboard
+* **Adjust FOV / Smoothing / Near Clip** — +/− buttons on main page
+
+
+### *Controls note:*
+> Button labels and exact bindings can differ depending on your platform (SteamVR, Oculus PC VR, Index, Meta Quest, etc.)
+
+
+# *Disclaimers:*
 * **This product is not affiliated with Gorilla Tag or Another Axiom LLC and is not endorsed or otherwise sponsored by Another Axiom LLC. Portions of the materials contained herein are property of Another Axiom LLC. ©2021 Another Axiom LLC.**
 
-* **controls can be different depending what you're playing on(steamvr,oculuspcvr,index, etc.)**
-
-* **if you find any bugs don report them to null**
+* **If you find any bugs, report them to null.**

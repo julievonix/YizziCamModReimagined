@@ -241,9 +241,6 @@ namespace YizziCamModV2.Comps
                         CameraController.Instance.SyncGeneralPageStatusTexts();
                         CameraController.Instance.SyncSubPageUnpin("GeneralBtn");
                         break;
-                    case "ThemeTabletBodyBtn":
-                        CameraController.Instance.SetAtlasActive(!CameraController.Instance._customAtlasActive);
-                        break;
                     case "ProfileBtn":
                         CameraController.Instance.GeneralPage.SetActive(false);
                         CameraController.Instance.ProfilePage.SetActive(true);
@@ -423,6 +420,8 @@ namespace YizziCamModV2.Comps
                         // If lock summon is turned off while the camera is locked, dismiss it now
                         if (!CameraController.Instance.lockSummon && CameraController.Instance.lockSummonActive)
                         {
+                            CameraController.Instance.CMVirtualCamera.enabled = false;
+                            CameraController.Instance._tabletExiled = false;
                             CameraController.Instance.lockSummonActive = false;
                             CameraController.Instance.fp = false;
                             CameraController.Instance.tpv = false;
@@ -765,21 +764,22 @@ namespace YizziCamModV2.Comps
                                 cc.TabletCameraGO.transform.Rotate(0.0f, 180f, 0.0f);
                             }
                         }
-                        cc.lockSummonActive = false;
                         cc.fp  = false;
                         cc.fpv = false;
                         cc.tpv = true;
 
-                        // Immediately snap the tablet to the TPV target position so the very
-                        // first frame already shows a correct third-person feed.  Without this,
-                        // SmoothDamp takes several frames to move from the FPV head position,
-                        // making the view look like FPV for a noticeable moment.
-                        var pivot = cc.followheadrot
-                            ? cc.CameraFollower.transform
-                            : cc.TPVBodyFollower.transform;
-                        cc.CameraTablet.transform.position = cc.TPVMode == CameraController.TPVModes.BACK
-                            ? pivot.TransformPoint(new Vector3(0f, 0.2f, -1.0f))
-                            : pivot.TransformPoint(new Vector3(0f, 0.2f,  1.0f));
+                        // When cam-dis is OFF, snap the tablet immediately to the TPV spot
+                        // so the first frame already shows a correct third-person feed.
+                        // When cam-dis is ON, the tablet stays in place — only the lens moves.
+                        if (!cc.camDisconnect)
+                        {
+                            var pivot = cc.followheadrot
+                                ? cc.CameraFollower.transform
+                                : cc.TPVBodyFollower.transform;
+                            cc.CameraTablet.transform.position = cc.TPVMode == CameraController.TPVModes.BACK
+                                ? pivot.TransformPoint(new Vector3(0f, 0.2f, -1.0f))
+                                : pivot.TransformPoint(new Vector3(0f, 0.2f,  1.0f));
+                        }
 
                         cc.ResetTabletCamera();
                         break;
@@ -791,6 +791,7 @@ namespace YizziCamModV2.Comps
                             CameraController.Instance.ThirdPersonCameraGO.transform.Rotate(0.0f, 180f, 0.0f);
                             CameraController.Instance.TabletCameraGO.transform.Rotate(0.0f, 180f, 0.0f);
                         }
+                        CameraController.Instance.CMVirtualCamera.enabled = false;
                         CameraController.Instance.lockSummonActive = false;
                         CameraController.Instance.fp = false;
                         CameraController.Instance.tpv = false;
@@ -848,9 +849,27 @@ namespace YizziCamModV2.Comps
                         CameraController.Instance.canbeused = true;
                         break;
                     case "FPButton":
-                        CameraController.Instance.lockSummonActive = false;
-                        CameraController.Instance.fp = !CameraController.Instance.fp;
+                    {
+                        var cc = CameraController.Instance;
+                        cc.lockSummonActive = false;
+                        bool enabling = !cc.fp;
+                        cc.fp = enabling;
+                        if (enabling)
+                        {
+                            // FP mode: clear other camera modes and snap cameras back to
+                            // their default local positions on the tablet so the feed comes
+                            // from the camera model's own POV as it follows the player.
+                            cc.tpv = false;
+                            cc.fpv = false;
+                            cc.ResetTabletCamera();
+                            // Make sure the camera model is visible while following.
+                            if (cc.FakeCameraGO != null && !cc.FakeCameraGO.activeSelf)
+                                cc.FakeCameraGO.SetActive(true);
+                            foreach (var mr in cc.meshRenderers) mr.enabled = true;
+                            if (!cc.MainPage.activeSelf) cc.MainPage.SetActive(true);
+                        }
                         break;
+                    }
                     case "MinDistDownButton":
                         CameraController.Instance.minDist -= 0.1f;
                         if (CameraController.Instance.minDist < 1)

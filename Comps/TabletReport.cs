@@ -58,6 +58,7 @@ namespace YizziCamModV2.Comps
 
         GameObject _bananaGripRoot;
         Transform _bananaAimPivot;
+        Transform _gunBodyTransform;
         LineRenderer _bananaLaser;
         Material _bananaDotBrownMat;
         Material _bananaMidYellowMat;
@@ -169,28 +170,14 @@ namespace YizziCamModV2.Comps
 
         void CleanupBananaGripVisual()
         {
-            if (_bananaDotBrownMat != null)
-            {
-                Destroy(_bananaDotBrownMat);
-                _bananaDotBrownMat = null;
-            }
-            if (_bananaMidYellowMat != null)
-            {
-                Destroy(_bananaMidYellowMat);
-                _bananaMidYellowMat = null;
-            }
-            if (_bananaLaserMat != null)
-            {
-                Destroy(_bananaLaserMat);
-                _bananaLaserMat = null;
-            }
+            if (_bananaDotBrownMat != null)  { Destroy(_bananaDotBrownMat);  _bananaDotBrownMat  = null; }
+            if (_bananaMidYellowMat != null) { Destroy(_bananaMidYellowMat); _bananaMidYellowMat = null; }
+            if (_bananaLaserMat != null)     { Destroy(_bananaLaserMat);     _bananaLaserMat     = null; }
+            if (_gunMat != null)             { Destroy(_gunMat);             _gunMat             = null; }
             _bananaLaser = null;
             _bananaAimPivot = null;
-            if (_bananaGripRoot != null)
-            {
-                Destroy(_bananaGripRoot);
-                _bananaGripRoot = null;
-            }
+            _gunBodyTransform = null;
+            if (_bananaGripRoot != null) { Destroy(_bananaGripRoot); _bananaGripRoot = null; }
         }
 
         static bool BananaHitIsLocalCollider(Collider hcol)
@@ -220,69 +207,175 @@ namespace YizziCamModV2.Comps
             return false;
         }
 
+        // ── Gun model ────────────────────────────────────────────────────────────
+        // The .obj is placed next to the plugin DLL at build time as YizziCamGun.obj
+        static Mesh   _gunMesh;
+        static bool   _gunMeshTried;
+        Material      _gunMat;
+
+        // Mesh half-extents of the source .obj (measured once):
+        // X: ±0.467 (barrel runs along X), Y: ±0.441, Z: ±0.142
+        const float GunSrcHalfX  = 0.467f;
+        // Scale so the gun is ~22 cm long along the barrel
+        const float GunTargetLen = 0.22f;
+        const float GunScale     = GunTargetLen / (GunSrcHalfX * 2f); // ≈ 0.236
+
+        static Mesh LoadGunMesh()
+        {
+            if (_gunMeshTried) return _gunMesh;
+            _gunMeshTried = true;
+
+            try
+            {
+                string pluginDir = System.IO.Path.GetDirectoryName(
+                    System.Reflection.Assembly.GetExecutingAssembly().Location) ?? "";
+                string objPath = System.IO.Path.Combine(pluginDir, "YizziCamGun.obj");
+                if (!System.IO.File.Exists(objPath)) return null;
+
+                var srcVerts = new List<Vector3>(150000);
+                var srcNorms = new List<Vector3>(150000);
+                var finalV   = new List<Vector3>(150000);
+                var finalN   = new List<Vector3>(150000);
+                var tris     = new List<int>(150000);
+
+                foreach (string raw in System.IO.File.ReadLines(objPath))
+                {
+                    if (raw.Length < 3) continue;
+                    if (raw[0] == 'v' && raw[1] == ' ')
+                    {
+                        var p = raw.Split(' ');
+                        if (p.Length >= 4)
+                            srcVerts.Add(new Vector3(
+                                float.Parse(p[1], System.Globalization.CultureInfo.InvariantCulture),
+                                float.Parse(p[2], System.Globalization.CultureInfo.InvariantCulture),
+                                float.Parse(p[3], System.Globalization.CultureInfo.InvariantCulture)));
+                    }
+                    else if (raw[0] == 'v' && raw[1] == 'n')
+                    {
+                        var p = raw.Split(' ');
+                        if (p.Length >= 4)
+                            srcNorms.Add(new Vector3(
+                                float.Parse(p[1], System.Globalization.CultureInfo.InvariantCulture),
+                                float.Parse(p[2], System.Globalization.CultureInfo.InvariantCulture),
+                                float.Parse(p[3], System.Globalization.CultureInfo.InvariantCulture)));
+                    }
+                    else if (raw[0] == 'f' && raw[1] == ' ')
+                    {
+                        var p = raw.Split(' ');
+                        if (p.Length < 4) continue;
+                        for (int i = 1; i <= 3; i++)
+                        {
+                            var fp = p[i].Split('/');
+                            int vi = int.Parse(fp[0]) - 1;
+                            int ni = fp.Length >= 3 && fp[2].Length > 0
+                                ? int.Parse(fp[2]) - 1 : vi;
+                            tris.Add(finalV.Count);
+                            finalV.Add(vi >= 0 && vi < srcVerts.Count ? srcVerts[vi] : Vector3.zero);
+                            finalN.Add(ni >= 0 && ni < srcNorms.Count ? srcNorms[ni] : Vector3.up);
+                        }
+                    }
+                }
+
+                if (finalV.Count == 0) return null;
+
+                var mesh = new Mesh { name = "YizziGun" };
+                if (finalV.Count > 65535)
+                    mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+                mesh.SetVertices(finalV);
+                mesh.SetNormals(finalN);
+                mesh.SetTriangles(tris, 0);
+                mesh.RecalculateBounds();
+                return _gunMesh = mesh;
+            }
+            catch (System.Exception ex)
+            {
+                BepInEx.Logging.Logger.CreateLogSource("YizziCam")
+                    .LogWarning("Gun mesh load failed: " + ex.Message);
+                return null;
+            }
+        }
+
         void EnsureBananaGripVisual(CameraController cc)
         {
             if (_bananaGripRoot != null) return;
 
             Shader sh = BananaPointerShaderFallback();
-            var root = new GameObject("YizziBananaPointer");
-            /* Not under ReportPage: UI RectTransforms can fight world rotations each frame. */
+            var root = new GameObject("YizziGunPointer");
             root.transform.SetParent(null, false);
             root.SetActive(false);
             _bananaGripRoot = root;
 
-            _bananaDotBrownMat = new Material(sh);
-            _bananaDotBrownMat.color = new Color(0.45f, 0.26f, 0.09f, 1f);
-
-            _bananaMidYellowMat = new Material(sh);
-            _bananaMidYellowMat.color = new Color(1f, 0.94f, 0.18f, 1f);
-
-            GameObject MakeDot(string name, Vector3 localPos)
+            Mesh gun = LoadGunMesh();
+            if (gun != null)
             {
-                var s = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-                s.name = name;
-                s.transform.SetParent(root.transform, false);
-                s.transform.localPosition = localPos;
-                s.transform.localScale = Vector3.one * BananaDotSphereDiameter;
-                var col = s.GetComponent<SphereCollider>();
-                if (col != null) Destroy(col);
-                var mr = s.GetComponent<MeshRenderer>();
-                if (mr != null) mr.sharedMaterial = _bananaDotBrownMat;
-                return s;
+                // ── Gun body ──────────────────────────────────────────────────
+                var gunGO = new GameObject("GunBody");
+                gunGO.transform.SetParent(root.transform, false);
+                gunGO.transform.localScale = Vector3.one * GunScale;
+                // localPosition and localRotation are both set each frame in
+                // UpdateBananaPointerWhileReporting so they can mirror for each hand.
+                _gunBodyTransform = gunGO.transform;
+
+                var mf = gunGO.AddComponent<MeshFilter>();
+                mf.sharedMesh = gun;
+
+                _gunMat = new Material(sh) { color = new Color(1f, 0.88f, 0.12f) };
+                var mr = gunGO.AddComponent<MeshRenderer>();
+                mr.sharedMaterial = _gunMat;
+
+                // Aim pivot at the muzzle (+X end of source mesh → +Z after rotation)
+                float muzzleZ = GunSrcHalfX * GunScale;   // ≈ 0.110 m
+                var aimPivotGO = new GameObject("GunAimPivot");
+                aimPivotGO.transform.SetParent(root.transform, false);
+                aimPivotGO.transform.localPosition = new Vector3(0f, 0f, muzzleZ);
+                _bananaAimPivot = aimPivotGO.transform;
+            }
+            else
+            {
+                // ── Fallback banana shape (gun model not found) ───────────────
+                _bananaDotBrownMat  = new Material(sh) { color = new Color(0.45f, 0.26f, 0.09f) };
+                _bananaMidYellowMat = new Material(sh) { color = new Color(1f, 0.94f, 0.18f) };
+
+                GameObject MakeDot(string name, Vector3 lp)
+                {
+                    var s = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                    s.name = name;
+                    s.transform.SetParent(root.transform, false);
+                    s.transform.localPosition = lp;
+                    s.transform.localScale    = Vector3.one * BananaDotSphereDiameter;
+                    var col = s.GetComponent<SphereCollider>(); if (col) Destroy(col);
+                    var mr  = s.GetComponent<MeshRenderer>();   if (mr)  mr.sharedMaterial = _bananaDotBrownMat;
+                    return s;
+                }
+
+                float h = BananaDotSeparationHalf;
+                MakeDot("BananaDotBack",  new Vector3(0f, 0f, -h));
+                var mid = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                mid.name = "BananaMid";
+                mid.transform.SetParent(root.transform, false);
+                mid.transform.localScale = new Vector3(BananaMidGirth, BananaMidGirth, BananaMidSpan);
+                var midCol = mid.GetComponent<SphereCollider>(); if (midCol) Destroy(midCol);
+                var midMr  = mid.GetComponent<MeshRenderer>();   if (midMr)  midMr.sharedMaterial = _bananaMidYellowMat;
+                MakeDot("BananaDotFront", new Vector3(0f, 0f,  h));
+
+                var aimPivotGO = new GameObject("BananaAimPivot");
+                aimPivotGO.transform.SetParent(root.transform, false);
+                aimPivotGO.transform.localPosition = new Vector3(0f, 0f, h);
+                _bananaAimPivot = aimPivotGO.transform;
             }
 
-            float h = BananaDotSeparationHalf;
-            MakeDot("BananaDotBack", new Vector3(0f, 0f, -h));
-
-            var mid = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-            mid.name = "BananaMidYellow";
-            mid.transform.SetParent(root.transform, false);
-            mid.transform.localPosition = Vector3.zero;
-            mid.transform.localScale = new Vector3(BananaMidGirth, BananaMidGirth, BananaMidSpan);
-            var midCol = mid.GetComponent<SphereCollider>();
-            if (midCol != null) Destroy(midCol);
-            var midMr = mid.GetComponent<MeshRenderer>();
-            if (midMr != null) midMr.sharedMaterial = _bananaMidYellowMat;
-
-            MakeDot("BananaDotFront", new Vector3(0f, 0f, h));
-
-            var aimPivotGO = new GameObject("BananaAimPivot");
-            aimPivotGO.transform.SetParent(root.transform, false);
-            aimPivotGO.transform.localPosition = new Vector3(0f, 0f, h);
-            _bananaAimPivot = aimPivotGO.transform;
-
-            var lrGo = new GameObject("BananaLaser");
+            // ── Laser beam (shared by both gun and banana) ────────────────────
+            var lrGo = new GameObject("GunLaser");
             lrGo.transform.SetParent(root.transform, false);
             _bananaLaser = lrGo.AddComponent<LineRenderer>();
-            _bananaLaserMat = new Material(sh);
-            _bananaLaserMat.color = new Color(1f, 1f, 0.15f, 0.92f);
-            _bananaLaser.material = _bananaLaserMat;
-            _bananaLaser.positionCount = 2;
-            _bananaLaser.startWidth = 0.0075f;
-            _bananaLaser.endWidth = 0.003f;
+            _bananaLaserMat = new Material(sh) { color = new Color(1f, 1f, 0.15f, 0.92f) };
+            _bananaLaser.material       = _bananaLaserMat;
+            _bananaLaser.positionCount  = 2;
+            _bananaLaser.startWidth     = 0.005f;
+            _bananaLaser.endWidth       = 0.002f;
             _bananaLaser.numCapVertices = 3;
-            _bananaLaser.textureMode = LineTextureMode.Stretch;
-            _bananaLaser.useWorldSpace = true;
+            _bananaLaser.textureMode    = LineTextureMode.Stretch;
+            _bananaLaser.useWorldSpace  = true;
         }
 
         static string BananaNickForPhotonActor(int actorNr)
@@ -457,7 +550,8 @@ namespace YizziCamModV2.Comps
         {
             bool leftOnly = leftGrip && !rightGrip;
             float lateral = leftOnly ? -0.058f : 0.058f;
-            lateral += BananaGripNudgeTowardLeftX;
+            // Negate the nudge for the left hand so it mirrors the right hand position.
+            lateral += leftOnly ? -BananaGripNudgeTowardLeftX : BananaGripNudgeTowardLeftX;
             return new Vector3(lateral, -0.018f, -0.048f);
         }
 
@@ -514,6 +608,14 @@ namespace YizziCamModV2.Comps
             lp.z += BananaGripNudgeAlongControllerForward;
             root.transform.localPosition = lp;
             root.transform.localRotation = BananaGripRotationInHand(rg);
+
+            // Root roll is ~−74° for right hand and ~+86° for left hand, so both the
+            // X-offset direction and the gun's pitch need to flip between hands.
+            if (_gunBodyTransform != null)
+            {
+                _gunBodyTransform.localPosition = new Vector3(rg ? 0.04f : -0.04f, 0f, 0.01f);
+                _gunBodyTransform.localRotation  = Quaternion.Euler(rg ? 90f : -90f, 90f, 0f);
+            }
 
             Vector3 rayDir = root.transform.forward.normalized;
             float startNudge = 0.045f;

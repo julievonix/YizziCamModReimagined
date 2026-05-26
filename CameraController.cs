@@ -13,6 +13,7 @@ using GorillaLocomotion;
 using Player = GorillaLocomotion.GTPlayer;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.Rendering;
 using TMPro;
 using YizziCamModV2.Comps;
 #pragma warning disable CS0618
@@ -44,11 +45,6 @@ namespace YizziCamModV2
         public Text ClipLagStatusText;
         public GameObject GeneralPage;
         public GameObject ThemesPage;
-        public bool       _customAtlasActive = true;
-        public Text       ThemeTabletText;
-        // Stores the original atlas texture per material so we can restore it
-        readonly List<(Material mat, Texture orig)> _atlasOriginals = new List<(Material, Texture)>();
-        Texture2D _customAtlasTex;
         public GameObject ReportPage;
         public GameObject MusicPage;
         public GameObject PinSelectorPage;
@@ -387,6 +383,16 @@ namespace YizziCamModV2
         public bool lockSummon = false;
         public bool lockSummonActive = false;
         bool _prevTeleportCamera;
+        // True after we have restored the tablet for the current cam-dis+TPV session.
+        // Prevents the restore from running every frame and fighting page navigation.
+        bool _camDisTpvEntered = false;
+        // True while the tablet has been exiled underground after a lock-summon dismiss in TPV.
+        public bool _tabletExiled = false;
+        // True while ThirdPersonCameraGO is temporarily detached from CameraTablet so that
+        // tablet teleports during FPV + lock-summon cannot drag it to "camera POV" position.
+        bool _fpvLsDetached = false;
+        static readonly Vector3 ExilePosition = new Vector3(0f, -9999f, 0f);
+        // Saves tpv state across a lock-summon dismiss/throw so it can be restored on re-summon.
 
         // ── Throw-physics state (velocity-based: swipe hand through camera model) ─
         bool    _camThrowing;
@@ -569,7 +575,6 @@ namespace YizziCamModV2
             ExtraPage.SetActive(false);
             ThirdPersonCamera.nearClipPlane = 0.1f;
             TabletCamera.nearClipPlane = 0.1f;
-            ReplaceAtlasTexture();
             camDisconnect = PlayerPrefs.GetInt("YizziCamDis", 0) == 1;
             fpv = true;
             foreach (MeshRenderer mr in meshRenderers)
@@ -577,8 +582,57 @@ namespace YizziCamModV2
                 mr.enabled = false;
             }
             MainPage.SetActive(false);
+            // Kill CinemachineBrain so it can never override ThirdPersonCamera's position
+            // after we take control of it.  The virtual camera is already disabled above.
+            var brain = ThirdPersonCameraGO.GetComponent<CinemachineBrain>();
+            if (brain != null) brain.enabled = false;
+            // Subscribe pre-render pins for both BiRP (Camera.onPreRender) and URP
+            // (RenderPipelineManager.beginCameraRendering) so the correct head position
+            // is always the absolute last thing written before each camera draws.
+            Camera.onPreRender += FpvPreRenderPin;
+            RenderPipelineManager.beginCameraRendering += FpvBeginCameraRendering;
             init = true;
         }
+
+        void OnDestroy()
+        {
+            Camera.onPreRender -= FpvPreRenderPin;
+            RenderPipelineManager.beginCameraRendering -= FpvBeginCameraRendering;
+        }
+
+        // Shared logic: pin cam to FPV head position right before it draws.
+        void ApplyFpvPin(Camera cam)
+        {
+            if (cam != ThirdPersonCamera && cam != TabletCamera) return;
+            if (!init || FirstPersonCameraGO == null) return;
+            // In FPV mode: pin to head (works for both cam-dis and non cam-dis).
+            if (fpv)
+            {
+                var basePos = camDisconnect
+                    ? CameraFollower.transform.position
+                    : FirstPersonCameraGO.transform.position;
+                var pos = basePos
+                          + Vector3.up                            * fpvOffsetY
+                          + FirstPersonCameraGO.transform.forward * fpvOffsetZ;
+                var rot = camDisconnect
+                    ? CameraFollower.transform.rotation
+                    : FirstPersonCameraGO.transform.rotation;
+                if (fpvRollLock)
+                {
+                    var fwd = rot * Vector3.forward;
+                    if (fwd.sqrMagnitude > 0.001f)
+                        rot = Quaternion.LookRotation(fwd, Vector3.up);
+                }
+                cam.transform.position = pos;
+                cam.transform.rotation = rot;
+            }
+        }
+
+        /// <summary>BiRP: fires immediately before each camera renders.</summary>
+        void FpvPreRenderPin(Camera cam) => ApplyFpvPin(cam);
+
+        /// <summary>URP: fires immediately before each camera renders.</summary>
+        void FpvBeginCameraRendering(ScriptableRenderContext ctx, Camera cam) => ApplyFpvPin(cam);
 
         public enum TPVModes
         {
@@ -617,55 +671,70 @@ namespace YizziCamModV2
                         MusicClockText.text = DateTime.Now.ToString("h:mm tt");
                 }
 
-                if (fpv && !lockSummonActive)
+                // ── FPV lock-summon detach guard ─────────────────────────────────────
+                // While FPV + lock-summon is active, ThirdPersonCameraGO is detached from
+                // CameraTablet so moving the tablet cannot drag it through "camera POV".
+                // Re-attach as soon as that state is no longer active.
+                if (_fpvLsDetached && !(fpv && !camDisconnect && lockSummonActive && !_tabletExiled))
                 {
-                    // Desired lens position: head + world-up Y offset + camera-forward Z offset
+                    if (ThirdPersonCameraGO != null)
+                        ThirdPersonCameraGO.transform.SetParent(CameraTablet.transform, true);
+                    _fpvLsDetached = false;
+                }
+
+                if (fpv)
+                {
                     var fpvHeadPos = FirstPersonCameraGO.transform.position;
-                    var fpvTarget  = fpvHeadPos
-                        + Vector3.up                             * fpvOffsetY
-                        + FirstPersonCameraGO.transform.forward  * fpvOffsetZ;
+                    var fpvRot     = FirstPersonCameraGO.transform.rotation;
 
-                    // Target rotation
-                    var fpvRot = FirstPersonCameraGO.transform.rotation;
-
-                    // Move the tablet body to head (no offset) so grabs/physics stay sane
-                    if (fpvClipping)
-                        CameraTablet.transform.position = Vector3.Lerp(CameraTablet.transform.position, fpvHeadPos, fpvClipLag);
-                    else
-                        CameraTablet.transform.position = fpvHeadPos;
-
-                    if (fpvRawRotation)
-                        CameraTablet.transform.rotation = fpvRot;
-                    else
-                        CameraTablet.transform.rotation = Quaternion.Lerp(CameraTablet.transform.rotation, fpvRot, smoothing);
-
-                    // Apply Y/Z offset to the lens camera in world space (same approach as camDisconnect
-                    // block, which is confirmed reliable).  Sets absolute world position every frame.
                     if (!camDisconnect)
                     {
+                        // Always pin the camera output to the player's head in FPV mode.
+                        // This runs even when lock-summon is active so the feed never
+                        // follows the floating/throwing tablet model.
                         var lensTarget = fpvHeadPos
                             + Vector3.up                            * fpvOffsetY
                             + FirstPersonCameraGO.transform.forward * fpvOffsetZ;
                         if (fpvClipping)
                         {
-                            TabletCameraGO.transform.position     = Vector3.Lerp(TabletCameraGO.transform.position,     lensTarget, fpvClipLag);
-                            ThirdPersonCameraGO.transform.position = Vector3.Lerp(ThirdPersonCameraGO.transform.position, lensTarget, fpvClipLag);
+                            TabletCameraGO.transform.position      = Vector3.Lerp(TabletCameraGO.transform.position,      lensTarget, fpvClipLag);
+                            ThirdPersonCameraGO.transform.position  = Vector3.Lerp(ThirdPersonCameraGO.transform.position, lensTarget, fpvClipLag);
                         }
                         else
                         {
-                            TabletCameraGO.transform.position     = lensTarget;
+                            TabletCameraGO.transform.position      = lensTarget;
                             ThirdPersonCameraGO.transform.position = lensTarget;
                         }
-                        TabletCameraGO.transform.rotation     = CameraTablet.transform.rotation;
-                        ThirdPersonCameraGO.transform.rotation = CameraTablet.transform.rotation;
-                    }
+                        // Always use the exact head rotation, not the tablet's smoothed/yaw-only
+                        // rotation — during lock-summon the tablet rotates differently to the head
+                        // which causes a one-frame flash to the wrong direction on summon/dismiss.
+                        TabletCameraGO.transform.rotation     = fpvRot;
+                        ThirdPersonCameraGO.transform.rotation = fpvRot;
 
-                    if (MainPage.activeSelf)
-                    {
-                        foreach (MeshRenderer mr in meshRenderers) mr.enabled = false;
-                        MainPage.SetActive(false);
+                        if (!lockSummonActive)
+                        {
+                            // When lock-summon is NOT active: also move the whole tablet
+                            // to the head and hide the model.
+                            if (fpvClipping)
+                                CameraTablet.transform.position = Vector3.Lerp(CameraTablet.transform.position, fpvHeadPos, fpvClipLag);
+                            else
+                                CameraTablet.transform.position = fpvHeadPos;
+
+                            if (fpvRawRotation)
+                                CameraTablet.transform.rotation = fpvRot;
+                            else
+                                CameraTablet.transform.rotation = Quaternion.Lerp(CameraTablet.transform.rotation, fpvRot, smoothing);
+
+                            if (MainPage.activeSelf)
+                            {
+                                foreach (MeshRenderer mr in meshRenderers) mr.enabled = false;
+                                MainPage.SetActive(false);
+                            }
+                            if (FakeCameraGO.activeSelf) FakeCameraGO.SetActive(false);
+                        }
                     }
-                    if (FakeCameraGO.activeSelf) FakeCameraGO.SetActive(false);
+                    // cam-dis + FPV: tablet stays where it is, the cam-dis block below
+                    // handles the lens.  Nothing to do here.
                 }
                 bool _tc = InputManager.instance.TeleportCamera;
                 bool teleportEdge = _tc && !_prevTeleportCamera;
@@ -687,35 +756,93 @@ namespace YizziCamModV2
                             FakeCameraGO.transform.localScale    = _fakeCamBaseScale;
                             _camThrowing = false;
                         }
-                        // Dismiss: close every open page then hide the tablet entirely
+                        // Dismiss
                         lockSummonActive = false;
-                        fp = false; tpv = false; fpv = true;
-                        ResetTabletCamera();
-                        SwitchToMainPage();
-                        HideRigForFPV();
+                        fp  = false;
+                        // Capture whether we were in FPV *before* clearing state so we can
+                        // decide below whether ResetTabletCamera() is safe to call.
+                        bool _wasFpvOnDismiss = fpv;
+                        fpv = false;
+                        _camDisTpvEntered = false;
+                        if (tpv)
+                        {
+                            // Hide the entire tablet (all pages + model).
+                            // ThirdPersonCamera stays active and positioned by the TPV block.
+                            _tabletExiled = true;
+                            HideRigForFPV();
+                        }
+                        else
+                        {
+                            tpv = false;
+                            fpv = true;
+                            // Mirror what the TPV dismiss branch does: skip ResetTabletCamera()
+                            // when we were already in FPV mode.  The FPV pin at the top of
+                            // LateUpdate already put cameras at the head; calling Reset here
+                            // drags them back to the tablet's lens offset and, because the
+                            // unified override uses a Lerp when fpvClipping is on, the
+                            // correction only gets part-way there in one frame → visible flash
+                            // to "camera POV" on every dismiss.
+                            if (!_wasFpvOnDismiss) ResetTabletCamera();
+                            HideRigForFPV();
+                        }
                     }
                     else
                     {
-                        // Summon: appear in front of player and stay there
+                        // Summon: bring the tablet back if it was exiled.
+                        if (_tabletExiled)
+                            _tabletExiled = false;
                         lockSummonActive = true;
-                        fp = false; tpv = false; fpv = false;
-                        ResetTabletCamera();
-                        if (!FakeCameraGO.activeSelf) FakeCameraGO.SetActive(true);
-                        SummonToLastPage();
+                        fp  = false;
+                        // Do NOT clear fpv — let the FPV block keep cameras pinned to
+                        // the player's head while the tablet model floats nearby.
+                        // Only reset camera local positions for non-FPV modes; in FPV the
+                        // final-pass pin below is the single authoritative placement.
+                        if (!fpv) ResetTabletCamera();
+                        if (tpv)
+                        {
+                            // Ensure model is fully visible; TPV block restores MainPage.
+                            if (FakeCameraGO != null && !FakeCameraGO.activeSelf) FakeCameraGO.SetActive(true);
+                            foreach (var mr in meshRenderers) mr.enabled = true;
+                            _camDisTpvEntered = false;
+                        }
+                        else
+                        {
+                            if (!FakeCameraGO.activeSelf) FakeCameraGO.SetActive(true);
+                            SummonToLastPage();
+                        }
                         var head = Player.Instance.headCollider.transform;
                         var flatFwd = new Vector3(head.forward.x, 0f, head.forward.z);
                         if (flatFwd.sqrMagnitude < 0.0001f) flatFwd = Vector3.forward;
                         else flatFwd.Normalize();
+                        // In FPV mode, detach ThirdPersonCameraGO from CameraTablet BEFORE
+                        // moving the tablet.  Once detached, the parent-move can no longer
+                        // drag it to "camera POV" and cause the one-frame flash on monitor.
+                        if (fpv && !camDisconnect && !_fpvLsDetached)
+                        {
+                            ThirdPersonCameraGO.transform.SetParent(null, true);
+                            _fpvLsDetached = true;
+                        }
                         CameraTablet.transform.position = head.position + flatFwd * 0.5f;
                         CameraTablet.transform.rotation = Quaternion.LookRotation(flatFwd);
+                        // Re-pin cameras to head after the tablet teleport (handles non-FPV
+                        // and cam-dis cases; for FPV the camera is now detached so the
+                        // position/rotation assignments still work fine as world-space sets).
+                        if (fpv && !camDisconnect)
+                        {
+                            var summonLens = head.position
+                                + Vector3.up                            * fpvOffsetY
+                                + FirstPersonCameraGO.transform.forward * fpvOffsetZ;
+                            TabletCameraGO.transform.position      = summonLens;
+                            ThirdPersonCameraGO.transform.position = summonLens;
+                            TabletCameraGO.transform.rotation      = FirstPersonCameraGO.transform.rotation;
+                            ThirdPersonCameraGO.transform.rotation = FirstPersonCameraGO.transform.rotation;
+                        }
                     }
                 }
                 else if (teleportEdge && CameraTablet.transform.parent == null && !lockSummon)
                 {
                     fp = false;
-                    tpv = false;
-                    // Always keep fpv=false so the camera stays at the tablet position
-                    // (cam-dis behaviour only applies in lock-summon and explicit FPV mode)
+                    if (!camDisconnect) tpv = false;
                     fpv = false;
                     ResetTabletCamera();
                     if (!FakeCameraGO.activeSelf) FakeCameraGO.SetActive(true);
@@ -750,6 +877,21 @@ namespace YizziCamModV2
                         CameraTablet.transform.rotation = Quaternion.Slerp(
                             CameraTablet.transform.rotation, Quaternion.LookRotation(flatFwd), 0.03f);
                     }
+
+                    // ── Post-movement FPV pin ────────────────────────────────────────
+                    // The FPV block at the top of LateUpdate pinned the cameras BEFORE
+                    // the tablet moved (follow lerp or throw physics).  As children they
+                    // drifted with the tablet.  Correct that here, after all tablet moves.
+                    if (fpv && !camDisconnect && !_tabletExiled)
+                    {
+                        var pinPos = FirstPersonCameraGO.transform.position
+                                     + Vector3.up                            * fpvOffsetY
+                                     + FirstPersonCameraGO.transform.forward * fpvOffsetZ;
+                        TabletCameraGO.transform.position      = pinPos;
+                        ThirdPersonCameraGO.transform.position = pinPos;
+                        TabletCameraGO.transform.rotation      = FirstPersonCameraGO.transform.rotation;
+                        ThirdPersonCameraGO.transform.rotation = FirstPersonCameraGO.transform.rotation;
+                    }
                 }
                 if (fp && !lockSummonActive)
                 {
@@ -766,11 +908,15 @@ namespace YizziCamModV2
                         CameraTablet.transform.position = Vector3.Lerp(CameraTablet.transform.position, CameraFollower.transform.position, fpspeed);
                     }
                 }
-                if (tpv && !lockSummonActive)
+                // Run whenever tpv is on, regardless of lock-summon or cam-dis state.
+                if (tpv)
                 {
-                    if (!camDisconnect)
+                    var tpvPivot = followheadrot ? CameraFollower.transform : TPVBodyFollower.transform;
+                    Vector3 tpvLookTarget = tpvPivot.TransformPoint(new Vector3(0f, 0.1f, 0f));
+
+                    if (!camDisconnect && !lockSummonActive)
                     {
-                        // Pure TPV — hide tablet so it doesn't float in the feed
+                        // Pure TPV — hide tablet, move it behind player
                         if (MainPage.activeSelf)
                         {
                             foreach (MeshRenderer mr in meshRenderers)
@@ -779,39 +925,58 @@ namespace YizziCamModV2
                         }
                         if (FakeCameraGO != null && FakeCameraGO.activeSelf)
                             FakeCameraGO.SetActive(false);
+
+                        if (TPVMode == TPVModes.BACK)
+                            targetPosition = tpvPivot.TransformPoint(new Vector3(0f, 0.2f, -1.0f));
+                        else
+                            targetPosition = tpvPivot.TransformPoint(new Vector3(0f, 0.2f,  1.0f));
+                        // When the tablet has been exiled underground, leave it there —
+                        // don't SmoothDamp it back into view. Cameras are set directly below.
+                        if (!_tabletExiled)
+                            CameraTablet.transform.position = Vector3.SmoothDamp(
+                                CameraTablet.transform.position, targetPosition, ref velocity, 0.1f);
+
+                        // Position cameras directly at the TPV target every frame.
+                        TabletCameraGO.transform.position      = targetPosition;
+                        TabletCameraGO.transform.LookAt(tpvLookTarget);
+                        ThirdPersonCameraGO.transform.position = targetPosition;
+                        ThirdPersonCameraGO.transform.LookAt(tpvLookTarget);
                     }
                     else
                     {
-                        // cam-dis + TPV — keep the camera model visible so the user can
-                        // still see and touch it; FPV mode may have hidden it already
-                        foreach (MeshRenderer mr in meshRenderers)
-                            mr.enabled = true;
-                        if (MainPage != null && !MainPage.activeSelf)
-                            MainPage.SetActive(true);
-                        if (FakeCameraGO != null && !FakeCameraGO.activeSelf)
-                            FakeCameraGO.SetActive(true);
+                        // cam-dis + TPV — tablet stays in place.
+                        // Only restore the model when the tablet is NOT exiled (dismissed).
+                        // If _tabletExiled is true we just dismissed the camera — don't re-show it.
+                        if (!_tabletExiled)
+                        {
+                            // Keep mesh/model visible every frame (FPV may have hidden them).
+                            foreach (MeshRenderer mr in meshRenderers)
+                                mr.enabled = true;
+                            if (FakeCameraGO != null && !FakeCameraGO.activeSelf)
+                                FakeCameraGO.SetActive(true);
+
+                            // Restore the page only ONCE per session so we don't fight
+                            // page-navigation (e.g. opening ExtraPage) on subsequent frames.
+                            if (!_camDisTpvEntered)
+                            {
+                                if (!MainPage.activeSelf) MainPage.SetActive(true);
+                                _camDisTpvEntered = true;
+                            }
+                        }
+
+                        // Only move the lens — tablet stays where the user left it
+                        Vector3 tpvCamPos = TPVMode == TPVModes.BACK
+                            ? tpvPivot.TransformPoint(new Vector3(0f, 0.2f, -1.0f))
+                            : tpvPivot.TransformPoint(new Vector3(0f, 0.2f,  1.0f));
+                        TabletCameraGO.transform.position      = tpvCamPos;
+                        TabletCameraGO.transform.LookAt(tpvLookTarget);
+                        ThirdPersonCameraGO.transform.position = tpvCamPos;
+                        ThirdPersonCameraGO.transform.LookAt(tpvLookTarget);
                     }
 
-                    var tpvPivot = followheadrot ? CameraFollower.transform : TPVBodyFollower.transform;
-                    // Position above centre of player, slightly offset in depth
-                    if (TPVMode == TPVModes.BACK)
-                        targetPosition = tpvPivot.TransformPoint(new Vector3(0f, 0.2f, -1.0f));
-                    else
-                        targetPosition = tpvPivot.TransformPoint(new Vector3(0f, 0.2f, 1.0f));
-                    CameraTablet.transform.position = Vector3.SmoothDamp(
-                        CameraTablet.transform.position, targetPosition, ref velocity, 0.1f);
-
-                    // Explicitly set both camera world positions and rotations every frame
-                    // so the feed shows the correct third-person view regardless of any
-                    // local rotation state left over from FPV or cam-dis modes.
-                    // The cam-dis block below will override these if cam-dis is also on.
-                    Vector3 tpvLookTarget = tpvPivot.TransformPoint(new Vector3(0f, 0.1f, 0f));
-                    TabletCameraGO.transform.position    = CameraTablet.transform.position;
-                    TabletCameraGO.transform.LookAt(tpvLookTarget);
-                    ThirdPersonCameraGO.transform.position = CameraTablet.transform.position;
-                    ThirdPersonCameraGO.transform.LookAt(tpvLookTarget);
-
-                    if (InputManager.instance.TeleportCamera)
+                    // Only exit TPV via teleport when cam-dis is OFF and lock-summon feature
+                    // is not active (lock-summon uses teleport button only to summon/dismiss).
+                    if (!lockSummonActive && !camDisconnect && !lockSummon && InputManager.instance.TeleportCamera)
                     {
                         CameraTablet.transform.position = Player.Instance.headCollider.transform.position + Player.Instance.headCollider.transform.forward;
                         foreach (MeshRenderer mr in meshRenderers)
@@ -819,6 +984,7 @@ namespace YizziCamModV2
                         if (MainPage != null && !MainPage.activeSelf) MainPage.SetActive(true);
                         CameraTablet.transform.parent = null;
                         if (FakeCameraGO != null) FakeCameraGO.SetActive(true);
+                        _camDisTpvEntered = false;
                         tpv = false;
                     }
                 }
@@ -826,7 +992,9 @@ namespace YizziCamModV2
                 // ── Cam-dis lens tracking ────────────────────────────────────────────────
                 // Skip when TPV is active — TPV already positioned the cameras and we
                 // don't want cam-dis to pull them back to the head position.
-                if (camDisconnect && !tpv)
+                // Also skip when FP mode is on — cameras should ride the tablet as children,
+                // giving the "camera's own POV" as it follows the player.
+                if (camDisconnect && !tpv && !fp)
                 {
                     var camBase = fpv
                         ? FirstPersonCameraGO.transform.position
@@ -834,7 +1002,9 @@ namespace YizziCamModV2
                     var camTarget = camBase
                           + Vector3.up                             * fpvOffsetY
                           + FirstPersonCameraGO.transform.forward  * fpvOffsetZ;
-                    if (fpvClipping)
+                    // Also snap position during throw so the clipping lerp doesn't start
+                    // from the throw endpoint and slowly track back to the head.
+                    if (fpvClipping && !_camThrowing)
                     {
                         TabletCameraGO.transform.position = Vector3.Lerp(TabletCameraGO.transform.position, camTarget, fpvClipLag);
                         ThirdPersonCameraGO.transform.position = Vector3.Lerp(ThirdPersonCameraGO.transform.position, camTarget, fpvClipLag);
@@ -844,7 +1014,9 @@ namespace YizziCamModV2
                         TabletCameraGO.transform.position = camTarget;
                         ThirdPersonCameraGO.transform.position = camTarget;
                     }
-                    Quaternion camDisRot = fpvRawRotation
+                    // During a throw the tablet tumbles, so TabletCameraGO.rotation is
+                    // wildly wrong — skip the lerp and snap straight to the head rotation.
+                    Quaternion camDisRot = (fpvRawRotation || _camThrowing)
                         ? CameraFollower.transform.rotation
                         : Quaternion.Lerp(TabletCameraGO.transform.rotation, CameraFollower.transform.rotation, smoothing);
                     if (fpvRollLock)
@@ -861,7 +1033,9 @@ namespace YizziCamModV2
                 // Must run LAST so it wins over both the camDisconnect block and the
                 // parent-child drag from the FPV block above.  Applies in FPV mode AND
                 // in standalone cam-dis mode (fpv may be false when tablet is detached).
-                if ((fpv || camDisconnect) && !lockSummonActive && !tpv)
+                // When FP mode is on with cam-dis, skip the cam-dis half of this override
+                // (cameras should ride the tablet, not be forced to the head).
+                if ((fpv || (camDisconnect && !fp)) && !lockSummonActive && !tpv)
                 {
                     var lensBase = fpv
                         ? FirstPersonCameraGO.transform.position
@@ -873,8 +1047,10 @@ namespace YizziCamModV2
                     // (CameraFollower), so roll lock must strip roll from that — not from the
                     // static floating tablet.  Only fall back to the tablet rotation in pure
                     // fpv mode with no cam-dis.
+                    // Use the exact head rotation for FPV — the tablet rotation lags/differs
+                    // during lock-summon and causes a one-frame flash on summon/dismiss.
                     var lensRot = (fpv && !camDisconnect)
-                        ? CameraTablet.transform.rotation
+                        ? FirstPersonCameraGO.transform.rotation
                         : CameraFollower.transform.rotation;
                     // Roll lock: strip any roll so the camera always sits level on the horizon
                     if (fpvRollLock)
@@ -895,6 +1071,29 @@ namespace YizziCamModV2
                     }
                     TabletCameraGO.transform.rotation     = lensRot;
                     ThirdPersonCameraGO.transform.rotation = lensRot;
+                }
+
+                // ── Absolute final FPV pin (lock-summon) ─────────────────────────────
+                // Runs LAST — after every other block that may have moved the tablet or
+                // reset camera local positions.  Mirrors what the TPV block does: one
+                // authoritative camera placement at the very end of LateUpdate so no
+                // intermediate operation can leave a stale frame on screen.
+                if (fpv && lockSummonActive && !camDisconnect && !_tabletExiled)
+                {
+                    var finalLens = FirstPersonCameraGO.transform.position
+                                    + Vector3.up                            * fpvOffsetY
+                                    + FirstPersonCameraGO.transform.forward * fpvOffsetZ;
+                    var finalRot  = FirstPersonCameraGO.transform.rotation;
+                    if (fpvRollLock)
+                    {
+                        var fwd = finalRot * Vector3.forward;
+                        if (fwd.sqrMagnitude > 0.001f)
+                            finalRot = Quaternion.LookRotation(fwd, Vector3.up);
+                    }
+                    TabletCameraGO.transform.position      = finalLens;
+                    ThirdPersonCameraGO.transform.position = finalLens;
+                    TabletCameraGO.transform.rotation      = finalRot;
+                    ThirdPersonCameraGO.transform.rotation = finalRot;
                 }
             }
         }
@@ -1174,6 +1373,21 @@ namespace YizziCamModV2
                 CameraTablet.transform.position += _camThrowVel * Time.deltaTime;
                 CameraTablet.transform.Rotate(_camThrowAngVel * Time.deltaTime, Space.World);
 
+                // In FPV mode: re-pin cameras to head after the tablet moved this frame.
+                // The FPV block already pinned them before UpdateCamThrow ran, but
+                // moving the parent (CameraTablet) shifts the children — this corrects that.
+                if (fpv && !camDisconnect)
+                {
+                    var throwLensPos = FirstPersonCameraGO.transform.position
+                                       + Vector3.up                            * fpvOffsetY
+                                       + FirstPersonCameraGO.transform.forward * fpvOffsetZ;
+                    var throwLensRot = FirstPersonCameraGO.transform.rotation;
+                    TabletCameraGO.transform.position      = throwLensPos;
+                    ThirdPersonCameraGO.transform.position = throwLensPos;
+                    TabletCameraGO.transform.rotation      = throwLensRot;
+                    ThirdPersonCameraGO.transform.rotation = throwLensRot;
+                }
+
                 // Full size during flight — only shrink in the last 0.4 s
                 if (_camThrowTimer >= kShrinkStart)
                 {
@@ -1191,10 +1405,24 @@ namespace YizziCamModV2
                     FakeCameraGO.transform.localScale    = _fakeCamBaseScale;
                     _camThrowing     = false;
                     lockSummonActive = false;
-                    fp = false; tpv = false; fpv = true;
-                    ResetTabletCamera();
-                    SwitchToMainPage();
-                    HideRigForFPV();
+                    fp  = false;
+                    fpv = false;
+                    _camDisTpvEntered = false;
+                    if (tpv)
+                    {
+                        // Hide the entire tablet; TPV block keeps ThirdPersonCamera at the correct spot.
+                        _tabletExiled = true;
+                        HideRigForFPV();
+                    }
+                    else
+                    {
+                        fpv = true;
+                        // Do NOT call ResetTabletCamera() here — the throw fix already
+                        // left cameras pinned at the player's head.  Calling Reset would
+                        // snap them to the tablet's far-away throw endpoint and the FPV
+                        // lerp would then visibly follow the trajectory back to the head.
+                        HideRigForFPV();
+                    }
                 }
                 return;
             }
@@ -2275,16 +2503,27 @@ namespace YizziCamModV2
                 ref GenRawRotText,
                 fpvRawRotation ? "RAW:ON" : "RAW:OFF");
 
-            // THEMES — 4th button on row 1
+            // THEMES — 4th button on row 1 (coming soon — grayed out, not interactive)
             {
                 var themesBtn = Instantiate(btnTemplate, page.transform);
                 themesBtn.name = "ThemesBtn";
                 themesBtn.transform.localPosition = bp + new Vector3(0f, rowTopBtn, topZ[3]);
                 AddButtonLabel(themesBtn, "THEMES");
                 Buttons.Add(themesBtn);
-                themesBtn.AddComponent<YzGButton>();
+                // No YzGButton — intentionally non-interactive
+
+                // Gray out the button body
+                foreach (var mr in themesBtn.GetComponentsInChildren<MeshRenderer>(true))
+                {
+                    mr.material = new Material(mr.material) { color = new Color(0.35f, 0.35f, 0.35f, 1f) };
+                }
+                // Gray out the button label text
+                var lbl = themesBtn.GetComponentInChildren<Text>(true);
+                if (lbl != null) lbl.color = new Color(0.55f, 0.55f, 0.55f, 1f);
+
                 var soonCanvas = CreateStatusCanvas(page, btnTemplate, new Vector3(-0.02f, rowTopStatus, topZ[3]));
-                soonCanvas.text = ">";
+                soonCanvas.text = "SOON";
+                soonCanvas.color = new Color(0.55f, 0.55f, 0.55f, 1f);
             }
 
             // ── Row 2 ─────────────────────────────────────────────────────────────────
@@ -2374,19 +2613,6 @@ namespace YizziCamModV2
 
         void PopulateThemesPage(GameObject page, GameObject btnTemplate)
         {
-            var bp = btnTemplate.transform.localPosition;
-
-            // ── Green texture toggle ──────────────────────────────────────────────────
-            var btn = Instantiate(btnTemplate, page.transform);
-            btn.name = "ThemeTabletBodyBtn";
-            btn.transform.localPosition = bp + new Vector3(0f, 0.42f, -0.54f);
-            AddButtonLabel(btn, "GREEN\nTEXTURE");
-            Buttons.Add(btn);
-            btn.AddComponent<YzGButton>();
-
-            var canvas = CreateStatusCanvas(page, btnTemplate, new Vector3(-0.02f, 0.28f, -0.54f));
-            canvas.text = _customAtlasActive ? "TEXTURE:ON" : "TEXTURE:OFF";
-            ThemeTabletText = canvas;
         }
 
         void PopulateWeatherTimePage(GameObject page, GameObject btnTemplate)
@@ -3129,50 +3355,5 @@ namespace YizziCamModV2
             }
         }
 
-        void ReplaceAtlasTexture()
-        {
-            Stream str = Assembly.GetExecutingAssembly().GetManifestResourceStream("YizziCamModV2.Assets.Atlas");
-            byte[] data;
-            using (MemoryStream ms = new MemoryStream())
-            {
-                str.CopyTo(ms);
-                data = ms.ToArray();
-            }
-            str.Close();
-
-            _customAtlasTex = new Texture2D(2, 2);
-            ImageConversion.LoadImage(_customAtlasTex, data);
-
-            _atlasOriginals.Clear();
-            Renderer[] allRenderers = FindObjectsOfType<Renderer>(true);
-            foreach (Renderer renderer in allRenderers)
-            {
-                foreach (Material mat in renderer.sharedMaterials)
-                {
-                    if (mat != null && mat.HasProperty("_MainTex"))
-                    {
-                        Texture tex = mat.mainTexture;
-                        if (tex != null && tex.name.ToLower().Contains("atlas"))
-                        {
-                            _atlasOriginals.Add((mat, tex));
-                            mat.mainTexture = _customAtlasTex;
-                        }
-                    }
-                }
-            }
-            _customAtlasActive = true;
-        }
-
-        public void SetAtlasActive(bool active)
-        {
-            _customAtlasActive = active;
-            foreach (var (mat, orig) in _atlasOriginals)
-            {
-                if (mat == null) continue;
-                mat.mainTexture = active ? _customAtlasTex : orig;
-            }
-            if (ThemeTabletText != null)
-                ThemeTabletText.text = active ? "TEXTURE:ON" : "TEXTURE:OFF";
-        }
     }
 }
