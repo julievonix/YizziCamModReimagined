@@ -26,7 +26,8 @@ namespace YizziCamModV2.Comps
         public bool ntShowPlatform  = true;
         public bool ntPlatformAsImg = true;   // true = icon, false = plain text
         public bool ntShowFps       = true;
-        public bool ntShowPing        = true;
+        public bool ntShowPing      = true;
+        public bool ntShowJoin      = false;
         public float ntMaxDist        = 20f;
         public float ntFloatHeight    = 0.42f;
 
@@ -150,6 +151,33 @@ namespace YizziCamModV2.Comps
             typeof(VRRig).GetField("creator",
                 BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
 
+        // VRRig.inTryOnRoom is only set on PCVR (wardrobe try-on is a PC-only feature)
+        static readonly FieldInfo _inTryOnRoomField =
+            typeof(VRRig).GetField("inTryOnRoom",
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+
+        // ── join-time tracking ────────────────────────────────────────────────
+        // Populated on OnPlayerEnteredRoom; for players already present when we
+        // join, BuildTag records the moment their tag is first constructed.
+        static readonly Dictionary<int, System.DateTime> _joinTimes =
+            new Dictionary<int, System.DateTime>();
+
+        // ── per-player name-tag hide list ────────────────────────────────────
+        static readonly HashSet<int> _hiddenTagActors = new HashSet<int>();
+
+        public static System.DateTime? GetJoinTime(int actorNumber)
+        {
+            return _joinTimes.TryGetValue(actorNumber, out var t) ? (System.DateTime?)t : null;
+        }
+
+        public static bool IsTagHidden(int actorNumber) => _hiddenTagActors.Contains(actorNumber);
+
+        public static void ToggleHideTag(int actorNumber)
+        {
+            if (!_hiddenTagActors.Add(actorNumber))
+                _hiddenTagActors.Remove(actorNumber);
+        }
+
         static void OnGetUserCosmeticsPostfix(VRRig __instance)
         {
             if (__instance == null || __instance.isOfflineVRRig) return;
@@ -159,28 +187,42 @@ namespace YizziCamModV2.Comps
                 if (owned == null) return;
                 string cosStr = string.Concat(owned).ToLowerInvariant();
 
-                // "s. first login" is an ambiguous item — skip cosmetics check, fall through
-                if (!cosStr.Contains("s. first login"))
+                // Steam-exclusive "Steam. First Login" cosmetic — every Steam player owns it
+                if (cosStr.Contains("s. first login"))
                 {
-                    // Steam-exclusive cosmetics that every Steam player has
-                    if (cosStr.Contains("first login") || cosStr.Contains("game-purchase"))
-                    {
-                        _rigPlatformCache[__instance] = "STEAM";
-                        return;
-                    }
+                    _rigPlatformCache[__instance] = "STEAM";
+                    return;
                 }
 
-                // Oculus PC players have more custom properties than Quest players
-                var netPlayer = _creatorField?.GetValue(__instance) as NetPlayer;
-                var photonPlayer = netPlayer?.GetPlayerRef();
-                int propCount = photonPlayer?.CustomProperties?.Count ?? 0;
-                if (propCount > 1)
+                // Oculus-platform login + purchase reward cosmetics (Meta/Oculus PC VR users)
+                if (cosStr.Contains("first login") && cosStr.Contains("game-purchase"))
                 {
                     _rigPlatformCache[__instance] = "OCULUS PC";
                     return;
                 }
 
-                _rigPlatformCache[__instance] = "QUEST";
+                // inTryOnRoom is exclusively set on PCVR hardware (wardrobe try-on feature)
+                bool inTryOnRoom = false;
+                try { inTryOnRoom = _inTryOnRoomField != null && (bool)_inTryOnRoomField.GetValue(__instance); }
+                catch { }
+                if (inTryOnRoom)
+                {
+                    _rigPlatformCache[__instance] = "OCULUS PC";
+                    return;
+                }
+
+                // Multiple Photon custom properties = PC client (Steam or generic PC)
+                var netPlayer = _creatorField?.GetValue(__instance) as NetPlayer;
+                var photonPlayer = netPlayer?.GetPlayerRef();
+                int propCount = photonPlayer?.CustomProperties?.Count ?? 0;
+                if (propCount > 1)
+                {
+                    _rigPlatformCache[__instance] = "STEAM";
+                    return;
+                }
+
+                // No strong cosmetic signal — leave unset so the account-creation-date
+                // fallback in TabletReport can resolve it via PlayFab (QUEST if post-2023-02-06)
             }
             catch { }
         }
@@ -191,6 +233,38 @@ namespace YizziCamModV2.Comps
             if (rig != null && _rigPlatformCache.TryGetValue(rig, out string p))
                 return p;
             return null;
+        }
+
+        // Allow external callers (e.g. TabletReport PlayFab callback) to write to the cache
+        internal static void SetCachedPlatform(VRRig rig, string platform)
+        {
+            if (rig != null) _rigPlatformCache[rig] = platform;
+        }
+
+        // FPS thresholds differ by platform:
+        //   Steam  — green 69+, orange 57-68, red 0-56
+        //   Quest  — green 57+,               red 0-56  (no orange tier)
+        string FormatFirstPlayed(int actorNumber)
+        {
+            TabletReport.RequestAccountCreationDate(actorNumber);
+            return TabletReport.FormatAccountCreation(actorNumber);
+        }
+
+        static Color FpsColor(int fps, string platform)
+        {
+            if (fps < 0) return Color.white;
+            bool isSteam = platform == "STEAM";
+            if (isSteam)
+            {
+                if (fps >= 69) return Color.green;
+                if (fps >= 57) return new Color(1f, 0.5f, 0f);
+                return Color.red;
+            }
+            else // Quest / unknown — single cut-off
+            {
+                if (fps >= 57) return Color.green;
+                return Color.red;
+            }
         }
 
         // ── per-player state ─────────────────────────────────────────────────────
@@ -207,17 +281,22 @@ namespace YizziCamModV2.Comps
             // row 2
             public Text       fpsText;
             public Text       pingText;
+            // row 3 (join time)
+            public Text       joinText;
             // cached last-rendered values — only write to Text when these change
             public string     cachedName     = null;
             public string     cachedPlatform = null;
             public int        cachedFps      = int.MinValue;
             public int        cachedPing     = int.MinValue;
+            public string     cachedJoinStr  = null;
             // layout state — only reflow when settings actually change
             public bool       layoutDirty    = true;
             // cached head transform — avoids reflection every frame
             public Transform  cachedHeadTf   = null;
             // last SetActive state — only call SetActive when it actually changes
             public bool       lastVisible    = false;
+            // fade-in alpha for the platform icon (0 = transparent, 1 = fully visible)
+            public float      iconAlpha      = 0f;
         }
 
         // Build queue — one new tag per frame to avoid join-spike lag
@@ -258,6 +337,7 @@ namespace YizziCamModV2.Comps
                 ntPlatformAsImg = ui._pendingNtPlatformAsImg;
                 ntShowFps       = ui._pendingNtShowFps;
                 ntShowPing      = ui._pendingNtShowPing;
+                ntShowJoin      = ui._pendingNtShowJoin;
                 ntMaxDist       = ui._pendingNtMaxDist;
                 ntFloatHeight   = ui._pendingNtFloatHeight;
                 ui._hasPendingNt = false;
@@ -303,7 +383,7 @@ namespace YizziCamModV2.Comps
                 }
 
                 float dist    = Vector3.Distance(camPos, head.position);
-                bool  inRange = dist <= ntMaxDist;
+                bool  inRange = dist <= ntMaxDist && !_hiddenTagActors.Contains(tag.actorNumber);
 
                 // Only call SetActive when the visibility state actually changes
                 if (inRange != tag.lastVisible)
@@ -322,17 +402,27 @@ namespace YizziCamModV2.Comps
                         tag.root.transform.rotation =
                             Quaternion.LookRotation(-toCam.normalized, Vector3.up);
                 }
+
+                // Smoothly fade the platform icon in over ~0.5 s so it doesn't pop in abruptly
+                if (tag.platformIcon != null && tag.platformIcon.enabled && tag.iconAlpha < 1f)
+                {
+                    tag.iconAlpha = Mathf.MoveTowards(tag.iconAlpha, 1f, Time.deltaTime * 2f);
+                    tag.platformIcon.color = new Color(1f, 1f, 1f, tag.iconAlpha);
+                }
             }
 
-            // Data refresh at 0.5 Hz (every 2 s) — canvas writes are skipped when values unchanged
+            // Data refresh at 2 Hz (every 0.5 s) — canvas writes are skipped when values unchanged
             if (Time.time < _nextDataRefresh) return;
-            _nextDataRefresh = Time.time + 2f;
+            _nextDataRefresh = Time.time + 0.5f;
             RefreshData();
         }
 
         // ── Photon room callbacks — event-driven join/leave ───────────────────────
         public void OnPlayerEnteredRoom(Photon.Realtime.Player newPlayer)
         {
+            // Record join time regardless of ntEnabled so the report page can show it
+            _joinTimes[newPlayer.ActorNumber] = System.DateTime.Now;
+
             if (!ntEnabled) return;
             // Delay slightly so the VRRig has time to spawn, then enqueue the tag build
             StartCoroutine(EnqueueAfterSpawn(newPlayer.ActorNumber));
@@ -340,6 +430,8 @@ namespace YizziCamModV2.Comps
 
         public void OnPlayerLeftRoom(Photon.Realtime.Player otherPlayer)
         {
+            _joinTimes.Remove(otherPlayer.ActorNumber);
+            _hiddenTagActors.Remove(otherPlayer.ActorNumber);
             RemoveTag(otherPlayer.ActorNumber);
         }
 
@@ -350,16 +442,20 @@ namespace YizziCamModV2.Comps
 
         IEnumerator EnqueueAfterSpawn(int actorNumber)
         {
-            // Wait 0.5 s for the VRRig to spawn, then do a fresh scene scan so the
-            // new player's scoreboard line is in the cache before we try to enqueue.
             yield return new WaitForSeconds(0.5f);
-            _sbLinesCache  = FindObjectsOfType<GorillaPlayerScoreboardLine>(true);
-            _nextSbRebuild = Time.time + 60f;
-            // Retry up to 5 more times in case the VRRig isn't ready yet
+
+            // Fast path: the new player might already be in the cached list
+            if (TryEnqueueFromLines(actorNumber)) yield break;
+
+            // Invalidate the cache so RefreshData rebuilds it on its next tick
+            // (spreads the cost across the normal 2 Hz loop instead of spiking here)
+            _sbLinesCache = null;
+
+            // Retry up to 5 times, waiting for the rig and cache to become available
             for (int i = 0; i < 5; i++)
             {
+                yield return new WaitForSeconds(0.5f);
                 if (TryEnqueueFromLines(actorNumber)) yield break;
-                yield return new WaitForSeconds(0.4f);
             }
         }
 
@@ -470,15 +566,22 @@ namespace YizziCamModV2.Comps
         const float CanvasH2  =  90f;   // 2-row (image mode)
         const float CanvasH3  = 108f;   // 3-row (text mode)
         const float CanvasH1  =  50f;   // 1-row (no bottom row)
+        const float JoinExtra =  22f;   // extra height when join row is visible
 
         // Row boundary constants (Y anchors, bottom = 0, top = 1)
         const float R3Top_2row = 0.40f;   // row-2 / row-3 split (2-row layout)
         const float R3Top_3row = 0.33f;   // fps/ping top (3-row layout) — equal thirds
         const float R2Top_3row = 0.63f;   // platform-text top / name bottom (3-row layout)
+        // Join row sits at the very bottom; fps/ping row starts above it
+        const float JoinRowH   = 0.20f;   // fraction of canvas height for the join row
 
         // ── tag construction ─────────────────────────────────────────────────────
         PlayerTag BuildTag(int actorNumber, VRRig rig)
         {
+            // Record join time for players already in the room when we joined
+            if (!_joinTimes.ContainsKey(actorNumber))
+                _joinTimes[actorNumber] = System.DateTime.Now;
+
             Font font = CameraController.Instance?.FovText?.font
                      ?? Resources.GetBuiltinResource<Font>("Arial.ttf");
 
@@ -560,6 +663,16 @@ namespace YizziCamModV2.Comps
                 rt.offsetMax = new Vector2(-2f, -2f);
             }, font, 22, FontStyle.Normal, new Color(0.55f, 0.8f, 1f), TextAnchor.MiddleCenter);
 
+            // ── JOIN TIME ─────────────────────────────────────────────────────────
+            var joinText = MakeText(root, "JoinText", rt =>
+            {
+                rt.anchorMin = new Vector2(0.03f, 0f);
+                rt.anchorMax = new Vector2(0.97f, JoinRowH);
+                rt.offsetMin = new Vector2( 2f,  padB);
+                rt.offsetMax = new Vector2(-2f, -2f);
+            }, font, 19, FontStyle.Normal, new Color(0.85f, 0.85f, 0.85f), TextAnchor.MiddleCenter);
+            joinText.enabled = false; // hidden until toggle turns it on
+
             var tag = new PlayerTag
             {
                 actorNumber    = actorNumber,
@@ -571,6 +684,7 @@ namespace YizziCamModV2.Comps
                 nameText       = nameText,
                 fpsText        = fpsText,
                 pingText       = pingText,
+                joinText       = joinText,
                 cachedHeadTf   = GetHeadTransform(rig)
             };
 
@@ -602,6 +716,7 @@ namespace YizziCamModV2.Comps
                 if (tag.fpsText  != null) tag.fpsText.enabled  = ntShowFps;
                 if (tag.pingText != null) tag.pingText.enabled = ntShowPing;
                 if (tag.nameText != null) tag.nameText.enabled = ntShowName;
+                if (tag.joinText != null) tag.joinText.enabled = ntShowJoin;
             }
 
             // ── Name — only write when value changes ──────────────────────────────
@@ -631,10 +746,13 @@ namespace YizziCamModV2.Comps
                               : MetaSprite;
                     tag.platformIcon.sprite  = s;
                     tag.platformIcon.enabled = s != null;
+                    // Reset so the icon fades in from transparent each time the sprite changes
+                    tag.iconAlpha = 0f;
+                    tag.platformIcon.color = new Color(1f, 1f, 1f, 0f);
                 }
             }
 
-            // ── FPS — only write when value changes ───────────────────────────────
+            // ── FPS — update text when value changes, color every tick ───────────
             if (tag.fpsText != null && ntShowFps)
             {
                 int fps = -1;
@@ -645,6 +763,8 @@ namespace YizziCamModV2.Comps
                     tag.fpsText.text = fps >= 0 ? $"FPS: {fps}" : "FPS: ?";
                     tag.cachedFps    = fps;
                 }
+                // Reapply color every tick so it updates as soon as platform is detected
+                tag.fpsText.color = FpsColor(fps, GetCachedPlatform(tag.rig));
             }
 
             // ── Ping — only write when value changes ──────────────────────────────
@@ -657,11 +777,23 @@ namespace YizziCamModV2.Comps
                     tag.cachedPing    = ping;
                 }
             }
+
+            // ── Join time — update when formatted string changes (every ~minute) ──
+            if (tag.joinText != null && ntShowJoin)
+            {
+                string js = FormatFirstPlayed(tag.actorNumber);
+                if (js != tag.cachedJoinStr)
+                {
+                    tag.joinText.text = js;
+                    tag.cachedJoinStr = js;
+                }
+            }
         }
 
         // ── public helpers called by buttons ─────────────────────────────────────
         public void RefreshAllTags()
         {
+            _platformCache.Clear();
             foreach (var tag in _tags.Values)
             {
                 bool active = ntEnabled;
@@ -675,6 +807,7 @@ namespace YizziCamModV2.Comps
                 tag.cachedPlatform = null;
                 tag.cachedFps      = int.MinValue;
                 tag.cachedPing     = int.MinValue;
+                tag.cachedJoinStr  = null;
             }
             if (ntEnabled) RefreshData();
         }
@@ -686,13 +819,21 @@ namespace YizziCamModV2.Comps
             bool textMode   = showPlat && !ntPlatformAsImg;
             bool imgMode    = showPlat &&  ntPlatformAsImg;
 
-            float canvasH = textMode   ? CanvasH3 :
+            float baseH   = textMode   ? CanvasH3 :
                             showBottom ? CanvasH2 : CanvasH1;
+            float canvasH = ntShowJoin ? baseH + JoinExtra : baseH;
             var rootRT = tag.root?.GetComponent<RectTransform>();
             if (rootRT != null) rootRT.sizeDelta = new Vector2(CanvasW, canvasH);
 
-            // Bottom row split boundary (higher when no bottom row)
-            float botSplit = showBottom ? (textMode ? R3Top_3row : R3Top_2row) : 0f;
+            // When join row is shown it sits at the very bottom;
+            // fps/ping row starts above it.
+            float joinTop  = ntShowJoin ? JoinRowH : 0f;
+
+            // Bottom row split boundary — the fps/ping row base is joinTop
+            float botSplit = showBottom
+                ? (textMode ? (joinTop + R3Top_3row * (1f - joinTop))
+                            : (joinTop + R3Top_2row * (1f - joinTop)))
+                : joinTop;
 
             // ── name rect ────────────────────────────────────────────────────────
             var nrt = tag.nameText?.GetComponent<RectTransform>();
@@ -702,7 +843,6 @@ namespace YizziCamModV2.Comps
                 float nameBottom = textMode ? R2Top_3row : botSplit;
                 nrt.anchorMin = new Vector2(nameLeft, nameBottom);
                 nrt.anchorMax = new Vector2(1f, 1f);
-                // Keep safe horizontal padding; left padding only needed when name fills full width
                 nrt.offsetMin = new Vector2(imgMode ? 4f : 14f, nrt.offsetMin.y);
                 nrt.offsetMax = new Vector2(-14f, nrt.offsetMax.y);
             }
@@ -727,14 +867,22 @@ namespace YizziCamModV2.Comps
             var frt = tag.fpsText?.GetComponent<RectTransform>();
             if (frt != null)
             {
-                frt.anchorMin = new Vector2(ntShowPing ? 0.05f : 0.03f, 0f);
+                frt.anchorMin = new Vector2(ntShowPing ? 0.05f : 0.03f, joinTop);
                 frt.anchorMax = new Vector2(ntShowPing ? 0.50f : 0.97f, botSplit);
             }
             var pirt = tag.pingText?.GetComponent<RectTransform>();
             if (pirt != null)
             {
-                pirt.anchorMin = new Vector2(ntShowFps ? 0.50f : 0.03f, 0f);
+                pirt.anchorMin = new Vector2(ntShowFps ? 0.50f : 0.03f, joinTop);
                 pirt.anchorMax = new Vector2(ntShowFps ? 0.95f : 0.97f, botSplit);
+            }
+
+            // ── join time rect ───────────────────────────────────────────────────
+            var jrt = tag.joinText?.GetComponent<RectTransform>();
+            if (jrt != null)
+            {
+                jrt.anchorMin = new Vector2(0.03f, 0f);
+                jrt.anchorMax = new Vector2(0.97f, joinTop);
             }
         }
 

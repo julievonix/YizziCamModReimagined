@@ -70,9 +70,9 @@ namespace YizziCamModV2.Comps
         {
             if (Settings.Load(out int viewMode, out float fov, out bool watermark,
                 out float smoothing, out int savedTimePreset, out bool rain, out float nearClip, out int summonInputMode,
-                out bool fpvRawRotation, out bool fpvClipping, out float fpvClipLag,
+                out bool fpvRawRotation, out bool fpvClipping,
                 out bool ntEnabled, out bool ntShowName, out bool ntShowPlatform, out bool ntPlatformAsImg,
-                out bool ntShowFps, out bool ntShowPing, out float ntMaxDist, out float ntFloatHeight))
+                out bool ntShowFps, out bool ntShowPing, out bool ntShowJoin, out float ntMaxDist, out float ntFloatHeight))
             {
                 showWatermark = watermark;
                 InputManager.instance.summonInputMode = summonInputMode;
@@ -86,7 +86,6 @@ namespace YizziCamModV2.Comps
                 cc.smoothing = smoothing;
                 cc.fpvRawRotation = fpvRawRotation;
                 cc.fpvClipping = fpvClipping;
-                cc.fpvClipLag = fpvClipLag;
                 cc.TabletCamera.fieldOfView = fov;
                 cc.ThirdPersonCamera.fieldOfView = fov;
                 cc.TabletCamera.nearClipPlane = nearClip;
@@ -106,6 +105,7 @@ namespace YizziCamModV2.Comps
                     ntm.ntPlatformAsImg = ntPlatformAsImg;
                     ntm.ntShowFps       = ntShowFps;
                     ntm.ntShowPing      = ntShowPing;
+                    ntm.ntShowJoin      = ntShowJoin;
                     ntm.ntMaxDist       = ntMaxDist;
                     ntm.ntFloatHeight   = ntFloatHeight;
                 }
@@ -118,6 +118,7 @@ namespace YizziCamModV2.Comps
                     _pendingNtPlatformAsImg = ntPlatformAsImg;
                     _pendingNtShowFps       = ntShowFps;
                     _pendingNtShowPing      = ntShowPing;
+                    _pendingNtShowJoin      = ntShowJoin;
                     _pendingNtMaxDist       = ntMaxDist;
                     _pendingNtFloatHeight   = ntFloatHeight;
                     _hasPendingNt           = true;
@@ -150,6 +151,7 @@ namespace YizziCamModV2.Comps
         internal bool  _pendingNtPlatformAsImg;
         internal bool  _pendingNtShowFps;
         internal bool  _pendingNtShowPing;
+        internal bool  _pendingNtShowJoin;
         internal float _pendingNtMaxDist       = 20f;
         internal float _pendingNtFloatHeight   = 0.42f;
 
@@ -260,7 +262,7 @@ namespace YizziCamModV2.Comps
             {
                 float y = 50f;
                 float sp = 26f;
-                float boxHeight = 492f;
+                float boxHeight = 496f;
                 if (specOffsetOpen) boxHeight += 40f;
                 if (CameraController.Instance.fpvClipping) boxHeight += 36f;
 
@@ -271,7 +273,12 @@ namespace YizziCamModV2.Comps
                 {
                     if (spectating) { spectating = false; followobject = null; }
                     if (freecam)
+                    {
                         CameraController.Instance.CameraTablet.transform.position = Player.Instance.headCollider.transform.position + Player.Instance.headCollider.transform.forward;
+                        CameraController.Instance.ShowAllTabletRenderers();
+                        if (CameraController.Instance.MainPage != null)
+                            CameraController.Instance.MainPage.SetActive(true);
+                    }
                     if (!CameraController.Instance.flipped)
                     {
                         CameraController.Instance.flipped = true;
@@ -282,11 +289,26 @@ namespace YizziCamModV2.Comps
                     CameraController.Instance.fp = false;
                     CameraController.Instance.tpv = false;
                     freecam = !freecam;
-                    if (freecam && CameraController.Instance.camDisconnect)
+                    if (freecam)
                     {
-                        CameraController.Instance.camDisconnect = false;
-                        PlayerPrefs.SetInt("YizziCamDis", 0);
-                        PlayerPrefs.Save();
+                        CameraController.Instance.HideAllTabletRenderers();
+                        if (CameraController.Instance.MainPage != null)
+                            CameraController.Instance.MainPage.SetActive(false);
+                        if (CameraController.Instance.camDisconnect)
+                        {
+                            CameraController.Instance.camDisconnect = false;
+                            PlayerPrefs.SetInt("YizziCamDis", 0);
+                            PlayerPrefs.Save();
+                        }
+                        if (CameraController.Instance.lockSummon)
+                        {
+                            if (CameraController.Instance.lockSummonActive)
+                            {
+                                CameraController.Instance.lockSummonActive = false;
+                                CameraController.Instance._fpvFreeTablet = false;
+                            }
+                            CameraController.Instance.lockSummon = false;
+                        }
                         CameraController.Instance.SyncGeneralPageStatusTexts();
                     }
                 }
@@ -366,13 +388,6 @@ namespace YizziCamModV2.Comps
                 y += sp;
                 CameraController.Instance.fpvClipping = GUI.Toggle(new Rect(30f, y, 175f, 20f), CameraController.Instance.fpvClipping, "FPV Camera Clipping");
                 y += sp;
-                if (CameraController.Instance.fpvClipping)
-                {
-                    GUI.Label(new Rect(35f, y, 165f, 20f), "       Clip Lag: " + CameraController.Instance.fpvClipLag.ToString("F2"));
-                    y += 16f;
-                    CameraController.Instance.fpvClipLag = GUI.HorizontalSlider(new Rect(35f, y, 165f, 15f), CameraController.Instance.fpvClipLag, 0.05f, 0.95f);
-                    y += 20f;
-                }
 
                 int sMode = InputManager.instance.summonInputMode;
                 if (sMode < 0 || sMode > 2) sMode = 0;
@@ -408,7 +423,9 @@ namespace YizziCamModV2.Comps
                     raining = !raining;
                     ApplyWeather();
                 }
-                y += sp + 2f;
+                y += sp;
+
+                y += 2f;
 
                 if (GUI.Button(new Rect(35f, y, 165f, 22f), "Save Settings"))
                 {
@@ -424,13 +441,13 @@ namespace YizziCamModV2.Comps
                         InputManager.instance.summonInputMode,
                         CameraController.Instance.fpvRawRotation,
                         CameraController.Instance.fpvClipping,
-                        CameraController.Instance.fpvClipLag,
                         ntm2 != null && ntm2.ntEnabled,
                         ntm2 == null || ntm2.ntShowName,
                         ntm2 == null || ntm2.ntShowPlatform,
                         ntm2 == null || ntm2.ntPlatformAsImg,
                         ntm2 == null || ntm2.ntShowFps,
                         ntm2 == null || ntm2.ntShowPing,
+                        ntm2 != null && ntm2.ntShowJoin,
                         ntm2?.ntMaxDist ?? 20f,
                         ntm2?.ntFloatHeight ?? 0.42f
                     );

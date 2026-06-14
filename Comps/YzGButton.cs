@@ -205,8 +205,6 @@ namespace YizziCamModV2.Comps
                         CameraController.Instance.CameraClipPage.SetActive(true);
                         if (CameraController.Instance.ClipLagStatusText != null)
                             CameraController.Instance.ClipLagStatusText.text = CameraController.Instance.fpvClipping ? "CLIP:ON" : "CLIP:OFF";
-                        if (CameraController.Instance.ClipLagValueText != null)
-                            CameraController.Instance.ClipLagValueText.text = CameraController.Instance.fpvClipLag.ToString("F2");
                         CameraController.Instance.SyncSubPageUnpin("CameraClipBtn");
                         CameraController.Instance.LastOpenPage = "cameraclip";
                         break;
@@ -241,6 +239,14 @@ namespace YizziCamModV2.Comps
                         CameraController.Instance.SyncGeneralPageStatusTexts();
                         CameraController.Instance.SyncSubPageUnpin("GeneralBtn");
                         break;
+                    case "ThemDefaultBtn":
+                        CameraController.Instance.ApplyTheme("default");
+                        FlashDone();
+                        break;
+                    case "ThemBevelBtn":
+                        CameraController.Instance.ApplyTheme("bevel");
+                        FlashDone();
+                        break;
                     case "ProfileBtn":
                         CameraController.Instance.GeneralPage.SetActive(false);
                         CameraController.Instance.ProfilePage.SetActive(true);
@@ -269,13 +275,13 @@ namespace YizziCamModV2.Comps
                                 InputManager.instance.summonInputMode,
                                 CameraController.Instance.fpvRawRotation,
                                 CameraController.Instance.fpvClipping,
-                                CameraController.Instance.fpvClipLag,
                                 ntm != null && ntm.ntEnabled,
                                 ntm == null || ntm.ntShowName,
                                 ntm == null || ntm.ntShowPlatform,
                                 ntm == null || ntm.ntPlatformAsImg,
                                 ntm == null || ntm.ntShowFps,
                                 ntm == null || ntm.ntShowPing,
+                                ntm != null && ntm.ntShowJoin,
                                 ntm?.ntMaxDist ?? 20f,
                                 ntm?.ntFloatHeight ?? 0.42f
                             );
@@ -328,6 +334,7 @@ namespace YizziCamModV2.Comps
                         if (TabletReport.Instance != null && TabletReport.Instance.IsInDetail)
                         {
                             FlashDone();
+                            TabletReport.Instance.InvalidateScoreboardCache();
                             var hsLine = TabletReport.Instance.FindScoreboardLine(TabletReport.Instance.DetailActorNumber);
                             if (hsLine != null)
                             {
@@ -340,6 +347,7 @@ namespace YizziCamModV2.Comps
                         if (TabletReport.Instance != null && TabletReport.Instance.IsInDetail)
                         {
                             FlashDone();
+                            TabletReport.Instance.InvalidateScoreboardCache();
                             var txLine = TabletReport.Instance.FindScoreboardLine(TabletReport.Instance.DetailActorNumber);
                             if (txLine != null)
                             {
@@ -352,6 +360,7 @@ namespace YizziCamModV2.Comps
                         if (TabletReport.Instance != null && TabletReport.Instance.IsInDetail)
                         {
                             FlashDone();
+                            TabletReport.Instance.InvalidateScoreboardCache();
                             var chLine = TabletReport.Instance.FindScoreboardLine(TabletReport.Instance.DetailActorNumber);
                             if (chLine != null)
                             {
@@ -367,6 +376,10 @@ namespace YizziCamModV2.Comps
                     case "RPMute":
                         if (TabletReport.Instance != null && TabletReport.Instance.IsInDetail)
                             TabletReport.Instance.ToggleMute();
+                        break;
+                    case "RPHideTag":
+                        if (TabletReport.Instance != null && TabletReport.Instance.IsInDetail)
+                            TabletReport.Instance.ToggleHideTag();
                         break;
                     case "WBCategoryPrevBtn":
                         TabletWardrobe.Instance?.CycleCategory(-1);
@@ -402,19 +415,34 @@ namespace YizziCamModV2.Comps
                         TabletWardrobe.Instance?.ScrollOutfit(true);
                         break;
                     case "GenCamDisBtn":
-                        CameraController.Instance.camDisconnect = !CameraController.Instance.camDisconnect;
-                        UnityEngine.PlayerPrefs.SetInt("YizziCamDis", CameraController.Instance.camDisconnect ? 1 : 0);
+                    {
+                        var _cc = CameraController.Instance;
+                        _cc.camDisconnect = !_cc.camDisconnect;
+                        UnityEngine.PlayerPrefs.SetInt("YizziCamDis", _cc.camDisconnect ? 1 : 0);
                         UnityEngine.PlayerPrefs.Save();
-                        if (!CameraController.Instance.camDisconnect && CameraController.Instance.fpv)
+                        if (!_cc.camDisconnect)
                         {
-                            CameraController.Instance.ResetTabletCamera();
-                            CameraController.Instance.HideRigForFPV();
+                            // Turning cam-dis OFF: exit FPV and free-tablet so cameras
+                            // follow the tablet rather than looking like cam-dis is still on.
+                            _cc._fpvFreeTablet = false;
+                            if (_cc.fpv)
+                            {
+                                _cc.fpv = false;
+                                _cc.ResetTabletCamera();
+                                // Make the tablet visible so the user can see where cameras are
+                                foreach (var mr in _cc.meshRenderers) mr.enabled = true;
+                                if (_cc.MainPage != null && !_cc.MainPage.activeSelf)
+                                    _cc.MainPage.SetActive(true);
+                                if (_cc.FakeCameraGO != null && !_cc.FakeCameraGO.activeSelf)
+                                    _cc.FakeCameraGO.SetActive(true);
+                            }
                         }
-                        if (CameraController.Instance.GenCamDisText != null)
-                            CameraController.Instance.GenCamDisText.text = CameraController.Instance.camDisconnect ? "CAM DIS:ON" : "CAM DIS:OFF";
-                        if (CameraController.Instance.GenRawRotText != null)
-                            CameraController.Instance.GenRawRotText.text = CameraController.Instance.fpvRawRotation ? "RAW ROTATION:ON" : "RAW ROTATION:OFF";
+                        if (_cc.GenCamDisText != null)
+                            _cc.GenCamDisText.text = _cc.camDisconnect ? "CAM DIS:ON" : "CAM DIS:OFF";
+                        if (_cc.GenRawRotText != null)
+                            _cc.GenRawRotText.text = _cc.fpvRawRotation ? "RAW ROTATION:ON" : "RAW ROTATION:OFF";
                         break;
+                    }
                     case "GenLockSummonBtn":
                         CameraController.Instance.lockSummon = !CameraController.Instance.lockSummon;
                         // If lock summon is turned off while the camera is locked, dismiss it now
@@ -519,21 +547,22 @@ namespace YizziCamModV2.Comps
                         break;
                     case "CCToggleBtn":
                         CameraController.Instance.fpvClipping = !CameraController.Instance.fpvClipping;
+                        CameraController.Instance.ResetClipState();
                         if (CameraController.Instance.ClipLagStatusText != null)
                             CameraController.Instance.ClipLagStatusText.text = CameraController.Instance.fpvClipping ? "CLIP:ON" : "CLIP:OFF";
                         var toggleLabel = this.GetComponentInChildren<UnityEngine.UI.Text>(true);
                         if (toggleLabel != null) toggleLabel.text = CameraController.Instance.fpvClipping ? "ON" : "OFF";
                         break;
-                    case "CCMinusBtn":
-                        CameraController.Instance.fpvClipLag = Mathf.Clamp(CameraController.Instance.fpvClipLag - 0.025f, 0.05f, 0.95f);
-                        if (CameraController.Instance.ClipLagValueText != null)
-                            CameraController.Instance.ClipLagValueText.text = CameraController.Instance.fpvClipLag.ToString("F2");
+                    case "CTMinusBtn":
+                        CameraController.Instance.clipTrailAmount = Mathf.Round(Mathf.Clamp(CameraController.Instance.clipTrailAmount - 0.1f, 0.1f, 5.0f) * 10f) / 10f;
+                        if (CameraController.Instance.ClipTrailValueText != null)
+                            CameraController.Instance.ClipTrailValueText.text = CameraController.Instance.clipTrailAmount.ToString("F1");
                         CameraController.Instance.canbeused = true;
                         break;
-                    case "CCPlusBtn":
-                        CameraController.Instance.fpvClipLag = Mathf.Clamp(CameraController.Instance.fpvClipLag + 0.025f, 0.05f, 0.95f);
-                        if (CameraController.Instance.ClipLagValueText != null)
-                            CameraController.Instance.ClipLagValueText.text = CameraController.Instance.fpvClipLag.ToString("F2");
+                    case "CTPlusBtn":
+                        CameraController.Instance.clipTrailAmount = Mathf.Round(Mathf.Clamp(CameraController.Instance.clipTrailAmount + 0.1f, 0.1f, 5.0f) * 10f) / 10f;
+                        if (CameraController.Instance.ClipTrailValueText != null)
+                            CameraController.Instance.ClipTrailValueText.text = CameraController.Instance.clipTrailAmount.ToString("F1");
                         CameraController.Instance.canbeused = true;
                         break;
                     case "MusicBtn":
@@ -584,6 +613,7 @@ namespace YizziCamModV2.Comps
                             var ntm = NameTagManager.Instance;
                             if (ntm == null) break;
                             ntm.ntShowName = !ntm.ntShowName;
+                            ntm.RefreshAllTags();
                             CameraController.Instance.SyncNameTagsPageTexts();
                         }
                         break;
@@ -592,6 +622,7 @@ namespace YizziCamModV2.Comps
                             var ntm = NameTagManager.Instance;
                             if (ntm == null) break;
                             ntm.ntShowPlatform = !ntm.ntShowPlatform;
+                            ntm.RefreshAllTags();
                             CameraController.Instance.SyncNameTagsPageTexts();
                         }
                         break;
@@ -600,6 +631,7 @@ namespace YizziCamModV2.Comps
                             var ntm = NameTagManager.Instance;
                             if (ntm == null) break;
                             ntm.ntPlatformAsImg = !ntm.ntPlatformAsImg;
+                            ntm.RefreshAllTags();
                             CameraController.Instance.SyncNameTagsPageTexts();
                         }
                         break;
@@ -608,6 +640,7 @@ namespace YizziCamModV2.Comps
                             var ntm = NameTagManager.Instance;
                             if (ntm == null) break;
                             ntm.ntShowFps = !ntm.ntShowFps;
+                            ntm.RefreshAllTags();
                             CameraController.Instance.SyncNameTagsPageTexts();
                         }
                         break;
@@ -616,6 +649,16 @@ namespace YizziCamModV2.Comps
                             var ntm = NameTagManager.Instance;
                             if (ntm == null) break;
                             ntm.ntShowPing = !ntm.ntShowPing;
+                            ntm.RefreshAllTags();
+                            CameraController.Instance.SyncNameTagsPageTexts();
+                        }
+                        break;
+                    case "NTShowJoinBtn":
+                        {
+                            var ntm = NameTagManager.Instance;
+                            if (ntm == null) break;
+                            ntm.ntShowJoin = !ntm.ntShowJoin;
+                            ntm.RefreshAllTags();
                             CameraController.Instance.SyncNameTagsPageTexts();
                         }
                         break;
@@ -726,21 +769,18 @@ namespace YizziCamModV2.Comps
                         }
                         break;
                     case "SmoothingDownButton":
-                        CameraController.Instance.smoothing -= 0.01f;
-                        if (CameraController.Instance.smoothing < 0.05f)
-                        {
-                            CameraController.Instance.smoothing = 0.11f;
-                        }
-                        CameraController.Instance.SmoothText.text = CameraController.Instance.smoothing.ToString();
+                        // Range 0.005–0.10, step 0.005.  Higher value = faster (less smooth).
+                        CameraController.Instance.smoothing = Mathf.Round((CameraController.Instance.smoothing - 0.005f) * 1000f) / 1000f;
+                        if (CameraController.Instance.smoothing < 0.005f)
+                            CameraController.Instance.smoothing = 0.10f;
+                        CameraController.Instance.SmoothText.text = CameraController.Instance.smoothing.ToString("F3");
                         CameraController.Instance.canbeused = true;
                         break;
                     case "SmoothingUpButton":
-                        CameraController.Instance.smoothing += 0.01f;
-                        if (CameraController.Instance.smoothing > 0.11f)
-                        {
-                            CameraController.Instance.smoothing = 0.05f;
-                        }
-                        CameraController.Instance.SmoothText.text = CameraController.Instance.smoothing.ToString();
+                        CameraController.Instance.smoothing = Mathf.Round((CameraController.Instance.smoothing + 0.005f) * 1000f) / 1000f;
+                        if (CameraController.Instance.smoothing > 0.10f)
+                            CameraController.Instance.smoothing = 0.005f;
+                        CameraController.Instance.SmoothText.text = CameraController.Instance.smoothing.ToString("F3");
                         CameraController.Instance.canbeused = true;
                         break;
                     case "TPVButton":
@@ -764,9 +804,10 @@ namespace YizziCamModV2.Comps
                                 cc.TabletCameraGO.transform.Rotate(0.0f, 180f, 0.0f);
                             }
                         }
-                        cc.fp  = false;
-                        cc.fpv = false;
-                        cc.tpv = true;
+                        cc.fp             = false;
+                        cc.fpv            = false;
+                        cc._fpvFreeTablet = false;
+                        cc.tpv            = true;
 
                         // When cam-dis is OFF, snap the tablet immediately to the TPV spot
                         // so the first frame already shows a correct third-person feed.
@@ -793,17 +834,53 @@ namespace YizziCamModV2.Comps
                         }
                         CameraController.Instance.CMVirtualCamera.enabled = false;
                         CameraController.Instance.lockSummonActive = false;
-                        CameraController.Instance.fp = false;
-                        CameraController.Instance.tpv = false;
-                        CameraController.Instance.fpv = true;
+                        CameraController.Instance.fp             = false;
+                        CameraController.Instance.tpv            = false;
+                        CameraController.Instance.fpv            = true;
+                        // Reset free-tablet mode so the tablet snaps back to the head
+                        // (normal FPV behaviour) when the user re-enters FPV explicitly.
+                        CameraController.Instance._fpvFreeTablet = false;
                         if (CameraController.Instance.FakeCameraGO != null)
                             CameraController.Instance.FakeCameraGO.SetActive(true);
                         break;
                     case "FlipCamButton":
-                        CameraController.Instance.flipped = !CameraController.Instance.flipped;
-                        CameraController.Instance.ThirdPersonCameraGO.transform.Rotate(0.0f, 180f, 0.0f);
-                        CameraController.Instance.TabletCameraGO.transform.Rotate(0.0f, 180f, 0.0f);
+                    {
+                        var cc = CameraController.Instance;
+                        bool wasInAnyMode = cc.fpv || cc.fp || cc.tpv;
+
+                        cc.CMVirtualCamera.enabled = false;
+                        cc.lockSummonActive = false;
+                        cc.fp  = false;
+                        cc.tpv = false;
+                        cc.fpv = false;
+                        cc._fpvFreeTablet = false;
+
+                        if (cc.FakeCameraGO != null)
+                            cc.FakeCameraGO.SetActive(true);
+                        foreach (var mr in cc.meshRenderers) mr.enabled = true;
+                        if (!cc.MainPage.activeSelf) cc.MainPage.SetActive(true);
+
+                        if (wasInAnyMode)
+                        {
+                            if (cc.flipped)
+                            {
+                                cc.flipped = false;
+                                cc.ThirdPersonCameraGO.transform.Rotate(0.0f, 180f, 0.0f);
+                                cc.TabletCameraGO.transform.Rotate(0.0f, 180f, 0.0f);
+                            }
+                            cc.SummonForCameraPov();
+                        }
+                        else
+                        {
+                            cc.flipped = !cc.flipped;
+                            cc.ThirdPersonCameraGO.transform.Rotate(0.0f, 180f, 0.0f);
+                            cc.TabletCameraGO.transform.Rotate(0.0f, 180f, 0.0f);
+                            cc.ResetCamPovNudge();
+                        }
+
+                        cc.ResetClipState();
                         break;
+                    }
                     case "FovDown":
                         CameraController.Instance.TabletCamera.fieldOfView -= 5f;
                         if (CameraController.Instance.TabletCamera.fieldOfView < 20)
@@ -854,20 +931,19 @@ namespace YizziCamModV2.Comps
                         cc.lockSummonActive = false;
                         bool enabling = !cc.fp;
                         cc.fp = enabling;
+                        cc.flipped = false;
                         if (enabling)
                         {
-                            // FP mode: clear other camera modes and snap cameras back to
-                            // their default local positions on the tablet so the feed comes
-                            // from the camera model's own POV as it follows the player.
-                            cc.tpv = false;
-                            cc.fpv = false;
+                            cc.tpv            = false;
+                            cc.fpv            = false;
+                            cc._fpvFreeTablet = false;
                             cc.ResetTabletCamera();
-                            // Make sure the camera model is visible while following.
                             if (cc.FakeCameraGO != null && !cc.FakeCameraGO.activeSelf)
                                 cc.FakeCameraGO.SetActive(true);
                             foreach (var mr in cc.meshRenderers) mr.enabled = true;
                             if (!cc.MainPage.activeSelf) cc.MainPage.SetActive(true);
                         }
+                        cc.ResetCamPovNudge();
                         break;
                     }
                     case "MinDistDownButton":

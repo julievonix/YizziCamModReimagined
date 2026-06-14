@@ -36,7 +36,8 @@ Camera Mod with in-game UI!
 * **Grab camera** — hold grip/trigger on the banana handle (right hand = right handle, left hand = left handle)
 * **First Person View** — FPV button on main page; press X/Y or F6 to exit
 * **Third Person View** — TPV button on main page; press X/Y or F6 to exit
-* **Follow Player mode** — FP button on main page
+* **Follow Player mode** — FP button on main page; grabbing the camera while in Follow Player keeps you in camera POV
+* **Flip Camera / Camera POV** — FLIP button on main page; enters camera POV (view through the camera lens). Press again to flip the camera 180°
 * **Camera Disconnect** — CAM DIS button (General page); decouples feed from tablet
 * **Freecam** — WASD / arrow keys on keyboard, or enable gamepad toggle on General page
 * **Open Tab Menu** — press **Tab** on keyboard

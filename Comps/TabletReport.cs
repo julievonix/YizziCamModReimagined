@@ -1,8 +1,11 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Text.RegularExpressions;
+using PlayFab;
+using PlayFab.ClientModels;
 using Photon.Pun;
 using Photon.Realtime;
 using UnityEngine;
@@ -40,6 +43,7 @@ namespace YizziCamModV2.Comps
         Text _detailFpsText;
         Text _detailPlatformText;
         Text _detailInfoText;
+        Text _detailJoinText;
         float _nextDetailFpsUpdate;
         bool _detailMuted;
         bool _voiceFocusActive;
@@ -208,7 +212,6 @@ namespace YizziCamModV2.Comps
         }
 
         // ── Gun model ────────────────────────────────────────────────────────────
-        // The .obj is placed next to the plugin DLL at build time as YizziCamGun.obj
         static Mesh   _gunMesh;
         static bool   _gunMeshTried;
         Material      _gunMat;
@@ -227,63 +230,56 @@ namespace YizziCamModV2.Comps
 
             try
             {
-                string pluginDir = System.IO.Path.GetDirectoryName(
-                    System.Reflection.Assembly.GetExecutingAssembly().Location) ?? "";
-                string objPath = System.IO.Path.Combine(pluginDir, "YizziCamGun.obj");
-                if (!System.IO.File.Exists(objPath)) return null;
+                var asm = System.Reflection.Assembly.GetExecutingAssembly();
+                var stream = asm.GetManifestResourceStream("YizziCamModV2.Assets.YizziCamGun");
+                if (stream == null) return null;
 
-                var srcVerts = new List<Vector3>(150000);
-                var srcNorms = new List<Vector3>(150000);
-                var finalV   = new List<Vector3>(150000);
-                var finalN   = new List<Vector3>(150000);
-                var tris     = new List<int>(150000);
-
-                foreach (string raw in System.IO.File.ReadLines(objPath))
+                byte[] data;
+                using (var ms = new System.IO.MemoryStream())
                 {
-                    if (raw.Length < 3) continue;
-                    if (raw[0] == 'v' && raw[1] == ' ')
-                    {
-                        var p = raw.Split(' ');
-                        if (p.Length >= 4)
-                            srcVerts.Add(new Vector3(
-                                float.Parse(p[1], System.Globalization.CultureInfo.InvariantCulture),
-                                float.Parse(p[2], System.Globalization.CultureInfo.InvariantCulture),
-                                float.Parse(p[3], System.Globalization.CultureInfo.InvariantCulture)));
-                    }
-                    else if (raw[0] == 'v' && raw[1] == 'n')
-                    {
-                        var p = raw.Split(' ');
-                        if (p.Length >= 4)
-                            srcNorms.Add(new Vector3(
-                                float.Parse(p[1], System.Globalization.CultureInfo.InvariantCulture),
-                                float.Parse(p[2], System.Globalization.CultureInfo.InvariantCulture),
-                                float.Parse(p[3], System.Globalization.CultureInfo.InvariantCulture)));
-                    }
-                    else if (raw[0] == 'f' && raw[1] == ' ')
-                    {
-                        var p = raw.Split(' ');
-                        if (p.Length < 4) continue;
-                        for (int i = 1; i <= 3; i++)
-                        {
-                            var fp = p[i].Split('/');
-                            int vi = int.Parse(fp[0]) - 1;
-                            int ni = fp.Length >= 3 && fp[2].Length > 0
-                                ? int.Parse(fp[2]) - 1 : vi;
-                            tris.Add(finalV.Count);
-                            finalV.Add(vi >= 0 && vi < srcVerts.Count ? srcVerts[vi] : Vector3.zero);
-                            finalN.Add(ni >= 0 && ni < srcNorms.Count ? srcNorms[ni] : Vector3.up);
-                        }
-                    }
+                    stream.CopyTo(ms);
+                    data = ms.ToArray();
                 }
 
-                if (finalV.Count == 0) return null;
+                // Binary STL: 80-byte header, 4-byte triangle count, then 50 bytes per triangle
+                if (data.Length < 84) return null;
+                uint triCount = System.BitConverter.ToUInt32(data, 80);
+                if (data.Length < 84 + triCount * 50) return null;
+
+                int vCount = (int)triCount * 3;
+                var verts = new Vector3[vCount];
+                var norms = new Vector3[vCount];
+                var tris  = new int[vCount];
+
+                int offset = 84;
+                for (uint t = 0; t < triCount; t++)
+                {
+                    float nx = System.BitConverter.ToSingle(data, offset);
+                    float ny = System.BitConverter.ToSingle(data, offset + 4);
+                    float nz = System.BitConverter.ToSingle(data, offset + 8);
+                    var normal = new Vector3(nx, ny, nz);
+                    offset += 12;
+
+                    int baseIdx = (int)t * 3;
+                    for (int v = 0; v < 3; v++)
+                    {
+                        float vx = System.BitConverter.ToSingle(data, offset);
+                        float vy = System.BitConverter.ToSingle(data, offset + 4);
+                        float vz = System.BitConverter.ToSingle(data, offset + 8);
+                        verts[baseIdx + v] = new Vector3(vx, vy, vz);
+                        norms[baseIdx + v] = normal;
+                        tris[baseIdx + v]  = baseIdx + v;
+                        offset += 12;
+                    }
+                    offset += 2; // attribute byte count
+                }
 
                 var mesh = new Mesh { name = "YizziGun" };
-                if (finalV.Count > 65535)
+                if (vCount > 65535)
                     mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
-                mesh.SetVertices(finalV);
-                mesh.SetNormals(finalN);
-                mesh.SetTriangles(tris, 0);
+                mesh.vertices  = verts;
+                mesh.normals   = norms;
+                mesh.triangles = tris;
                 mesh.RecalculateBounds();
                 return _gunMesh = mesh;
             }
@@ -893,6 +889,7 @@ namespace YizziCamModV2.Comps
             _detailActorNumber = actorNumber;
             _detailViewIndex = 0;
             _detailMuted = false;
+            RequestAccountCreationDate(actorNumber);
 
             foreach (var go in _items)
                 if (go != null) go.SetActive(false);
@@ -928,15 +925,20 @@ namespace YizziCamModV2.Comps
 
             // --- Info rows (left side) ---
             string fpsStr = fps >= 0 ? "FPS: " + fps : "FPS: ?";
-            MakeInfoButton("DetailFps", basePos + new Vector3(0f, 0.60f, -0.35f), fpsStr);
+            MakeInfoButton("DetailFps", basePos + new Vector3(0f, 0.62f, -0.40f), fpsStr);
             _detailFpsText = _detailItems[_detailItems.Count - 1].GetComponentInChildren<Text>(true);
+            if (_detailFpsText != null) _detailFpsText.color = Color.white;
 
-            MakeInfoButton("DetailPlatform", basePos + new Vector3(0f, 0.46f, -0.35f), "PLATFORM: " + platform);
+            MakeInfoButton("DetailPlatform", basePos + new Vector3(0f, 0.48f, -0.40f), "PLATFORM: " + platform);
             _detailPlatformText = _detailItems[_detailItems.Count - 1].GetComponentInChildren<Text>(true);
 
             string colorStr = "COLOR: " + cr + " " + cg + " " + cb;
-            MakeInfoButton("DetailColor", basePos + new Vector3(0f, 0.32f, -0.35f), colorStr);
+            MakeInfoButton("DetailColor", basePos + new Vector3(0f, 0.34f, -0.40f), colorStr);
             _detailInfoText = _detailItems[_detailItems.Count - 1].GetComponentInChildren<Text>(true);
+
+            string joinStr = FormatAccountCreation(actorNumber);
+            MakeInfoButton("DetailJoin", basePos + new Vector3(0f, 0.20f, -0.40f), joinStr);
+            _detailJoinText = _detailItems[_detailItems.Count - 1].GetComponentInChildren<Text>(true);
 
             // --- 3D Preview (right side) ---
             BuildDetailPreview(basePos + new Vector3(0f, 0.42f, -0.90f));
@@ -1015,12 +1017,23 @@ namespace YizziCamModV2.Comps
 
         void EnforceMutes()
         {
-            bool hasMutes = _mutedActors.Count > 0;
-            bool hasFocus = _focusedActors.Count > 0;
-            if (!hasMutes && !hasFocus) return;
-
             if (Time.time < _nextEnforceTime) return;
             _nextEnforceTime = Time.time + 0.1f;
+
+            bool hasMutes = _mutedActors.Count > 0;
+            bool hasFocus = _focusedActors.Count > 0;
+
+            if (!hasMutes && !hasFocus)
+            {
+                // Nothing active — restore any previously-adjusted volumes, then stop
+                if (_voiceSourceCache.Count > 0)
+                {
+                    foreach (var kvp in _voiceSourceCache)
+                        if (kvp.Value != null) kvp.Value.volume = 1f;
+                    _voiceSourceCache.Clear();
+                }
+                return;
+            }
 
             BuildVoiceCache();
 
@@ -1045,9 +1058,26 @@ namespace YizziCamModV2.Comps
         {
             _detailMuted = !_detailMuted;
             if (_detailMuted)
+            {
                 _mutedActors.Add(_detailActorNumber);
+            }
             else
+            {
                 _mutedActors.Remove(_detailActorNumber);
+                // Restore volume immediately so it doesn't stay at 0
+                if (_voiceSourceCache.TryGetValue(_detailActorNumber, out var src) && src != null)
+                    src.volume = _focusedActors.Contains(_detailActorNumber) ? FocusBoost
+                               : _focusedActors.Count > 0 ? FocusDim : 1f;
+            }
+
+            // Also toggle the game's built-in mute on the scoreboard
+            var line = FindScoreboardLine(_detailActorNumber);
+            if (line != null)
+            {
+                line.PressButton(true,  GorillaPlayerLineButton.ButtonType.Mute);
+                line.PressButton(false, GorillaPlayerLineButton.ButtonType.Mute);
+            }
+
             UpdateMuteLabel();
         }
 
@@ -1193,6 +1223,7 @@ namespace YizziCamModV2.Comps
             _detailFpsText = null;
             _detailPlatformText = null;
             _detailInfoText = null;
+            _detailJoinText = null;
             _detailMuted = false;
         }
 
@@ -1201,9 +1232,12 @@ namespace YizziCamModV2.Comps
             _inDetail = false;
             _detailActorNumber = -1;
             _detailRig = null;
+            _detailRenderers = null;
+            _detailOrigLayers = null;
             _detailFpsText = null;
             _detailPlatformText = null;
             _detailInfoText = null;
+            _detailJoinText = null;
             _detailMuted = false;
 
             CleanupDetailCamera();
@@ -1228,12 +1262,29 @@ namespace YizziCamModV2.Comps
         public bool IsInDetail => _inDetail;
         public int DetailActorNumber => _detailActorNumber;
 
+        GorillaPlayerScoreboardLine[] _reportSbCache;
+        float _reportSbCacheTime;
+
+        public void InvalidateScoreboardCache() { _reportSbCache = null; }
+
         public GorillaPlayerScoreboardLine FindScoreboardLine(int actorNumber)
         {
-            var lines = FindObjectsOfType<GorillaPlayerScoreboardLine>(true);
-            foreach (var line in lines)
+            if (_reportSbCache == null || Time.time - _reportSbCacheTime > 2f)
             {
-                if (line.playerActorNumber == actorNumber)
+                _reportSbCache = FindObjectsOfType<GorillaPlayerScoreboardLine>(true);
+                _reportSbCacheTime = Time.time;
+            }
+            foreach (var line in _reportSbCache)
+            {
+                if (line != null && line.playerActorNumber == actorNumber)
+                    return line;
+            }
+            // Cache might be stale — retry with fresh data
+            _reportSbCache = FindObjectsOfType<GorillaPlayerScoreboardLine>(true);
+            _reportSbCacheTime = Time.time;
+            foreach (var line in _reportSbCache)
+            {
+                if (line != null && line.playerActorNumber == actorNumber)
                     return line;
             }
             return null;
@@ -1337,6 +1388,11 @@ namespace YizziCamModV2.Comps
 
         const int PreviewLayer = 31;
 
+        Renderer[] _detailRenderers;
+        int[]      _detailOrigLayers;
+        float      _detailNextRender;
+        const float DetailRenderInterval = 1f / 15f; // 15 fps preview to reduce GPU cost
+
         void RenderDetailPreview()
         {
             if (_detailCam == null || _detailRig == null) return;
@@ -1360,22 +1416,31 @@ namespace YizziCamModV2.Comps
                 }
             }
 
+            // Throttle renders to reduce GPU cost
+            if (Time.time < _detailNextRender) return;
+            _detailNextRender = Time.time + DetailRenderInterval;
+
             UpdateDetailCameraPose();
             _detailCam.enabled = false;
 
-            // Swap rig renderers to an isolated layer so only the rig renders
-            var renderers = _detailRig.GetComponentsInChildren<Renderer>(true);
-            var origLayers = new int[renderers.Length];
-            for (int i = 0; i < renderers.Length; i++)
+            // Cache renderers so we don't allocate every frame
+            if (_detailRenderers == null)
             {
-                origLayers[i] = renderers[i].gameObject.layer;
-                renderers[i].gameObject.layer = PreviewLayer;
+                _detailRenderers  = _detailRig.GetComponentsInChildren<Renderer>(true);
+                _detailOrigLayers = new int[_detailRenderers.Length];
+            }
+
+            for (int i = 0; i < _detailRenderers.Length; i++)
+            {
+                if (_detailRenderers[i] == null) { _detailRenderers = null; return; }
+                _detailOrigLayers[i] = _detailRenderers[i].gameObject.layer;
+                _detailRenderers[i].gameObject.layer = PreviewLayer;
             }
 
             _detailCam.Render();
 
-            for (int i = 0; i < renderers.Length; i++)
-                renderers[i].gameObject.layer = origLayers[i];
+            for (int i = 0; i < _detailRenderers.Length; i++)
+                _detailRenderers[i].gameObject.layer = _detailOrigLayers[i];
         }
 
         void UpdateDetailCameraPose()
@@ -1411,7 +1476,10 @@ namespace YizziCamModV2.Comps
             {
                 int fps = GetRigFps(_detailRig);
                 if (_detailFpsText != null)
-                    _detailFpsText.text = fps >= 0 ? "FPS: " + fps : "FPS: ?";
+                {
+                    _detailFpsText.text  = fps >= 0 ? "FPS: " + fps : "FPS: ?";
+                    _detailFpsText.color = Color.white;
+                }
                 if (_detailPlatformText != null)
                     _detailPlatformText.text = "PLATFORM: " + DetectPlatform(_detailActorNumber);
             }
@@ -1431,7 +1499,134 @@ namespace YizziCamModV2.Comps
                 int cb = Mathf.Clamp(Mathf.RoundToInt(playerColor.b * 9f), 0, 9);
                 _detailInfoText.text = "COLOR: " + cr + " " + cg + " " + cb;
             }
+
+            if (_detailJoinText != null)
+                _detailJoinText.text = FormatAccountCreation(_detailActorNumber);
         }
+
+
+        static string FormatJoinTime(int actorNumber)
+        {
+            var t = NameTagManager.GetJoinTime(actorNumber);
+            if (t == null) return "JOINED: unknown";
+            var elapsed = System.DateTime.Now - t.Value;
+            if (elapsed.TotalMinutes < 1)
+                return "JOINED: just now";
+            if (elapsed.TotalHours < 1)
+                return $"JOINED: {(int)elapsed.TotalMinutes}m ago";
+            return $"JOINED: {(int)elapsed.TotalHours}h {elapsed.Minutes}m ago";
+        }
+
+        // ── Account creation date (via PlayFab) ──────────────────────────────
+
+        public static string FormatAccountCreation(int actorNumber)
+        {
+            if (_pendingCreationLookups.Contains(actorNumber))
+                return "...";
+            if (!_acctCreationCache.TryGetValue(actorNumber, out System.DateTime? dt) || dt == null)
+                return "?";
+            return dt.Value.ToString("M/d/yyyy");
+        }
+
+        public static void RequestAccountCreationDate(int actorNumber)
+        {
+            if (_acctCreationCache.ContainsKey(actorNumber) || _pendingCreationLookups.Contains(actorNumber))
+                return;
+
+            var photonPlayer = FindPhotonPlayerByActor(actorNumber);
+            string userId = ResolveUserIdForActor(actorNumber, photonPlayer);
+            if (string.IsNullOrEmpty(userId)) return;
+
+            _pendingCreationLookups.Add(actorNumber);
+
+            if (PhotonUserIdLooksLikeSteam(userId))
+            {
+                string steam64 = ExtractSteam64(userId);
+                if (string.IsNullOrEmpty(steam64))
+                {
+                    _pendingCreationLookups.Remove(actorNumber);
+                    return;
+                }
+                PlayFabClientAPI.GetPlayFabIDsFromSteamIDs(
+                    new GetPlayFabIDsFromSteamIDsRequest { SteamStringIDs = new List<string> { steam64 } },
+                    res =>
+                    {
+                        string pfId = res.Data?.FirstOrDefault()?.PlayFabId;
+                        if (!string.IsNullOrEmpty(pfId))
+                            FetchAccountCreationInfo(actorNumber, pfId);
+                        else
+                            FinishCreationLookup(actorNumber, null);
+                    },
+                    err => FinishCreationLookup(actorNumber, null));
+            }
+            else
+            {
+                FetchAccountCreationInfo(actorNumber, userId);
+            }
+        }
+
+        static void FetchAccountCreationInfo(int actorNumber, string playFabId)
+        {
+            PlayFabClientAPI.GetAccountInfo(
+                new GetAccountInfoRequest { PlayFabId = playFabId },
+                res => FinishCreationLookup(actorNumber, res.AccountInfo?.Created),
+                err => FinishCreationLookup(actorNumber, null));
+        }
+
+        static void FinishCreationLookup(int actorNumber, System.DateTime? created)
+        {
+            _acctCreationCache[actorNumber] = created;
+            _pendingCreationLookups.Remove(actorNumber);
+
+            // Creation-date platform fallback (mirrors TooMuchInfo OculusPayDay logic):
+            // if cosmetics gave no platform signal and account was created after the
+            // Meta/standalone era began, the player is almost certainly on Quest.
+            var rig = TabletReport.FindRigForActorStatic(actorNumber);
+            if (rig != null && NameTagManager.GetCachedPlatform(rig) == null
+                && created.HasValue && created.Value > _oculusPayDay)
+            {
+                NameTagManager.SetCachedPlatform(rig, "QUEST");
+            }
+
+            if (Instance == null || Instance._detailActorNumber != actorNumber) return;
+            if (Instance._detailJoinText != null)
+                Instance._detailJoinText.text = FormatAccountCreation(actorNumber);
+            if (Instance._detailPlatformText != null)
+                Instance._detailPlatformText.text = "PLATFORM: " + DetectPlatform(actorNumber);
+        }
+
+        static string ExtractSteam64(string userId)
+        {
+            foreach (var piece in SteamAuthIdSlices(userId))
+            {
+                string t = piece.Trim();
+                if (t.Length >= 17 && t.Length <= 19
+                    && t.StartsWith("7656119", System.StringComparison.Ordinal)
+                    && AllDigits(t))
+                    return t;
+            }
+            return null;
+        }
+
+        public void ToggleHideTag()
+        {
+            if (_detailActorNumber <= 0) return;
+            NameTagManager.ToggleHideTag(_detailActorNumber);
+            // Update the button label to reflect the new state
+            bool nowHidden = NameTagManager.IsTagHidden(_detailActorNumber);
+            foreach (var go in _detailItems)
+            {
+                if (go == null || go.name != "RPHideTag") continue;
+                var lbl = go.GetComponentInChildren<Text>(true);
+                if (lbl != null) lbl.text = nowHidden ? "TAG:\nSHOW" : "TAG:\nHIDE";
+            }
+        }
+
+        // Account-creation date cache (actor number → creation date, null = lookup failed)
+        static readonly Dictionary<int, System.DateTime?> _acctCreationCache     = new Dictionary<int, System.DateTime?>();
+        static readonly HashSet<int>                      _pendingCreationLookups = new HashSet<int>();
+        // Accounts created after this date with no other platform signal are Quest standalone
+        static readonly System.DateTime                   _oculusPayDay          = new System.DateTime(2023, 2, 6);
 
         static readonly FieldInfo _fpsField = typeof(VRRig).GetField("fps",
             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
@@ -2116,6 +2311,8 @@ namespace YizziCamModV2.Comps
                 || lowered.IndexOf("osxplayer", System.StringComparison.Ordinal) >= 0)
                 scoreP += 3;
         }
+
+        public static VRRig FindRigForActorStatic(int actorNumber) => FindRigForActor(actorNumber);
 
         static VRRig FindRigForActor(int actorNumber)
         {

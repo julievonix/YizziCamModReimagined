@@ -112,6 +112,14 @@
     </Reference>
   </ItemGroup>
 
+  <!-- PlayFab SDK (ships with Gorilla Tag) -->
+  <ItemGroup>
+    <Reference Include="PlayFab">
+      <HintPath>$(ManagedDir)\PlayFab.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
   <!-- Photon -->
   <ItemGroup>
     <Reference Include="PhotonUnityNetworking">
@@ -155,13 +163,19 @@
     <EmbeddedResource Include="..\Assets\platform_oculus_pc.png">
       <LogicalName>YizziCamModV2.Assets.platform_oculus_pc</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="..\Assets\YizziTabletBevel.obj">
+      <LogicalName>YizziCamModV2.Assets.YizziTabletBevel</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\Assets\YizziCamGun.stl">
+      <LogicalName>YizziCamModV2.Assets.YizziCamGun</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
   <PropertyGroup>
     <DeployToBepInExPlugins Condition="'$(DeployToBepInExPlugins)' == ''">true</DeployToBepInExPlugins>
   </PropertyGroup>
 
-  <!-- After each successful build → Gorilla Tag BepInEx\plugins ($(GameDir) must exist). -->
+  <!-- After each successful build → Gorilla Tag BepInEx\plugins\YizziCamModReimagend\ -->
   <!-- Turn off for this build: dotnet build -p:DeployToBepInExPlugins=false -->
   <Target Name="DeployToBepInExPlugins" AfterTargets="Build" Condition="'$(DeployToBepInExPlugins)' != 'false'">
     <Warning
@@ -170,25 +184,35 @@
       Condition="!Exists('$(GameDir)')" />
     <PropertyGroup Condition="Exists('$(GameDir)')">
       <_YizziPdb>$(TargetDir)$(TargetName).pdb</_YizziPdb>
-      <_NowPlayingOut>$(BepInExPluginsDir)\YizziNowPlaying</_NowPlayingOut>
+      <_ModDir>$(BepInExPluginsDir)\YizziCameraModReimagend</_ModDir>
+      <_NowPlayingOut>$(_ModDir)\YizziNowPlaying</_NowPlayingOut>
     </PropertyGroup>
-    <MakeDir Directories="$(BepInExPluginsDir)" Condition="Exists('$(GameDir)')" />
-    <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(BepInExPluginsDir)\$(TargetFileName)" SkipUnchangedFiles="false" Condition="Exists('$(GameDir)')" />
-    <Copy SourceFiles="$(_YizziPdb)" DestinationFolder="$(BepInExPluginsDir)" SkipUnchangedFiles="false" Condition="Exists('$(GameDir)') And Exists('$(_YizziPdb)')" />
-    <!-- Remove old DLL name if present so BepInEx doesn't load the mod twice -->
-    <Delete Files="$(BepInExPluginsDir)\YizziCamModV2.dll" Condition="Exists('$(BepInExPluginsDir)\YizziCamModV2.dll')" />
-    <Message Importance="high" Text="YizziCamModReimagend → $(BepInExPluginsDir)\$(TargetFileName)" Condition="Exists('$(GameDir)')" />
-    <!-- Build and deploy the NowPlayingHelper (song-info query tool) -->
+
+    <!-- Ensure the mod subfolder exists -->
+    <MakeDir Directories="$(_ModDir)" Condition="Exists('$(GameDir)')" />
+
+    <!-- Deploy DLL and PDB into the subfolder -->
+    <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(_ModDir)\$(TargetFileName)" SkipUnchangedFiles="false" Condition="Exists('$(GameDir)')" />
+    <Copy SourceFiles="$(_YizziPdb)" DestinationFolder="$(_ModDir)" SkipUnchangedFiles="false" Condition="Exists('$(GameDir)') And Exists('$(_YizziPdb)')" />
+    <Message Importance="high" Text="YizziCamModReimagend → $(_ModDir)\$(TargetFileName)" Condition="Exists('$(GameDir)')" />
+
+    <!-- Remove any stale root-level or old-subfolder copies -->
+    <Delete Files="$(BepInExPluginsDir)\$(TargetFileName)"                     Condition="Exists('$(BepInExPluginsDir)\$(TargetFileName)')" />
+    <Delete Files="$(BepInExPluginsDir)\$(TargetName).pdb"                     Condition="Exists('$(BepInExPluginsDir)\$(TargetName).pdb')" />
+    <Delete Files="$(BepInExPluginsDir)\YizziCamModV2.dll"                     Condition="Exists('$(BepInExPluginsDir)\YizziCamModV2.dll')" />
+    <Delete Files="$(BepInExPluginsDir)\YizziCamGun.obj"                       Condition="Exists('$(BepInExPluginsDir)\YizziCamGun.obj')" />
+    <Delete Files="$(BepInExPluginsDir)\YizziTabletBevel.obj"                  Condition="Exists('$(BepInExPluginsDir)\YizziTabletBevel.obj')" />
+    <Delete Files="$(_ModDir)\YizziCamGun.obj"                                Condition="Exists('$(_ModDir)\YizziCamGun.obj')" />
+    <Delete Files="$(_ModDir)\YizziTabletBevel.obj"                           Condition="Exists('$(_ModDir)\YizziTabletBevel.obj')" />
+    <Delete Files="$(BepInExPluginsDir)\YizziCamModReimagend\$(TargetFileName)" Condition="Exists('$(BepInExPluginsDir)\YizziCamModReimagend\$(TargetFileName)')" />
+    <Delete Files="$(BepInExPluginsDir)\YizziCamModReimagend\$(TargetName).pdb" Condition="Exists('$(BepInExPluginsDir)\YizziCamModReimagend\$(TargetName).pdb')" />
+    <RemoveDir Directories="$(BepInExPluginsDir)\YizziNowPlaying"              Condition="Exists('$(BepInExPluginsDir)\YizziNowPlaying')" />
+
+    <!-- Build and deploy the NowPlayingHelper nested inside the mod folder -->
     <Exec Command="C:\Users\Monk\.dotnet\dotnet.exe publish &quot;$(MSBuildThisFileDirectory)NowPlayingHelper\NowPlayingHelper.csproj&quot; -c Release -o &quot;$(_NowPlayingOut)&quot; --nologo -v q"
           Condition="Exists('$(GameDir)')"
           IgnoreExitCode="true" />
     <Message Importance="high" Text="YizziNowPlaying → $(_NowPlayingOut)" Condition="Exists('$(GameDir)')" />
-    <!-- Copy gun model so TabletReport can load it at runtime -->
-    <Copy SourceFiles="C:\Users\Monk\Downloads\8748fcb184740d08360c12c9ba9268fc\8748fcb184740d08360c12c9ba9268fc.obj"
-          DestinationFiles="$(BepInExPluginsDir)\YizziCamGun.obj"
-          Condition="Exists('$(GameDir)') And Exists('C:\Users\Monk\Downloads\8748fcb184740d08360c12c9ba9268fc\8748fcb184740d08360c12c9ba9268fc.obj')" />
-    <Message Importance="high" Text="YizziCamGun.obj → $(BepInExPluginsDir)\YizziCamGun.obj"
-             Condition="Exists('$(GameDir)') And Exists('C:\Users\Monk\Downloads\8748fcb184740d08360c12c9ba9268fc\8748fcb184740d08360c12c9ba9268fc.obj')" />
   </Target>
 
 </Project>
